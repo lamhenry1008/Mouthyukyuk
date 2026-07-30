@@ -1,0 +1,11 @@
+# Google clasp project/account configuration
+.clasp.json
+.clasprc.json
+**/.clasp.json
+**/.clasprc.json
+
+# Local credentials and dependencies
+.env
+.env.*
+node_modules/
+.DS_Store
