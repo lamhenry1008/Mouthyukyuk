@@ -1,0 +1,13 @@
+# clasp project/account configuration
+.clasp.json
+.clasprc.json
+**/.clasp.json
+**/.clasprc.json
+
+# Credentials
+.env
+.env.*
+
+# Dependencies and macOS files
+node_modules/
+.DS_Store
