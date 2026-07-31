@@ -54,6 +54,9 @@ const MYK_SHOPIFY = Object.freeze({
 
   metafieldNamespace: 'custom',
   itemIdMetafieldKey: 'item_id',
+  chineseNameMetafieldKey: 'chinese_name',
+  storageLocationMetafieldKey: 'storage_location',
+  inkSizeMetafieldKey: 'ink_size',
   baseColorsMetafieldKey: 'ink_base_colors',
   glitterColorsMetafieldKey: 'ink_glitter_colors',
   sheenColorsMetafieldKey: 'ink_sheen_colors',
@@ -61,35 +64,35 @@ const MYK_SHOPIFY = Object.freeze({
   sourceRowMetafieldKey: 'source_row',
 
   resultHeaders: [
-  'Review Select',
-  'Approval',
-  'Validation',
-  'Upload Action',
-  'Source Sheet',
-  'Source Row',
-  'Item Type',
-  'Item ID',
-  'Handle',
-  'English Name',
-  'Chinese Name',
-  'Brand',
-  'Product Type',
-  'Shopify Taxonomy ID',
-  'SKU',
-  'Price',
-  'Inventory',
-  'Ink Base Colors',
-  'Ink Glitter Colors',
-  'Ink Sheen Colors',
-  'Tags',
-  'Body HTML',
-  'Image URL',
-  'Shopify Product GID',
-  'Shopify Variant GID',
-  'Shopify Inventory Item GID',
-  'Shopify Result',
-  'Uploaded At',
-],
+    'Review Select',
+    'Approval',
+    'Validation',
+    'Upload Action',
+    'Source Sheet',
+    'Source Row',
+    'Item Type',
+    'Item ID',
+    'Handle',
+    'English Name',
+    'Chinese Name',
+    'Brand',
+    'Product Type',
+    'Shopify Taxonomy ID',
+    'SKU',
+    'Price',
+    'Inventory',
+    'Ink Base Colors',
+    'Ink Glitter Colors',
+    'Ink Sheen Colors',
+    'Tags',
+    'Body HTML',
+    'Image URL',
+    'Shopify Product GID',
+    'Shopify Variant GID',
+    'Shopify Inventory Item GID',
+    'Shopify Result',
+    'Uploaded At',
+  ],
 });
 
 const MYK_TAXONOMY = Object.freeze({
@@ -316,6 +319,27 @@ function setupShopifyMetafields() {
       key: MYK_SHOPIFY.itemIdMetafieldKey,
       type: 'single_line_text_field',
       description: 'Internal Mouthyukyuk item identifier.',
+    },
+    {
+      name: 'Chinese Name',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.chineseNameMetafieldKey,
+      type: 'single_line_text_field',
+      description: 'Chinese product name.',
+    },
+    {
+      name: 'Storage Location',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.storageLocationMetafieldKey,
+      type: 'single_line_text_field',
+      description: 'Internal product storage location.',
+    },
+    {
+      name: 'Ink Size',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.inkSizeMetafieldKey,
+      type: 'single_line_text_field',
+      description: 'Ink bottle or sample size.',
     },
     {
       name: 'Ink Base Colors',
@@ -2753,21 +2777,56 @@ function setShopifyProductMetafields_(
       type: 'list.single_line_text_field',
       value: JSON.stringify(data.sheenColors),
     },
+  ];
+
+  [
     {
+      property: 'chineseName',
+      key: MYK_SHOPIFY.chineseNameMetafieldKey,
+    },
+    {
+      property: 'storageLocation',
+      key: MYK_SHOPIFY.storageLocationMetafieldKey,
+    },
+    {
+      property: 'inkSize',
+      key: MYK_SHOPIFY.inkSizeMetafieldKey,
+    },
+  ].forEach((definition) => {
+    if (
+      Object.prototype.hasOwnProperty.call(
+          data,
+          definition.property)
+    ) {
+      metafields.push({
+        ownerId: productId,
+        namespace: MYK_SHOPIFY.metafieldNamespace,
+        key: definition.key,
+        type: 'single_line_text_field',
+        value: clean_(data[definition.property]),
+      });
+    }
+  });
+
+  if (clean_(data.sourceSheet)) {
+    metafields.push({
       ownerId: productId,
       namespace: MYK_SHOPIFY.metafieldNamespace,
       key: MYK_SHOPIFY.sourceSheetMetafieldKey,
       type: 'single_line_text_field',
-      value: data.sourceSheet,
-    },
-    {
+      value: clean_(data.sourceSheet),
+    });
+  }
+
+  if (clean_(data.sourceRow)) {
+    metafields.push({
       ownerId: productId,
       namespace: MYK_SHOPIFY.metafieldNamespace,
       key: MYK_SHOPIFY.sourceRowMetafieldKey,
       type: 'number_integer',
       value: String(data.sourceRow),
-    },
-  ];
+    });
+  }
 
   const payload = callShopifyGraphql_(
       accessToken,

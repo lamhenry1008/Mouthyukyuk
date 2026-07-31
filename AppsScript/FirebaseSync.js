@@ -22,8 +22,10 @@ function initializeFirebase() {
     creds.project_id, 
     "v1"
   );
-  const database_id = 'mouthyukyuk'
-  firestore.baseUrl = `https://firestore.googleapis.com/v1/projects/${creds.project_id}/databases/${database_id}/documents/`;
+  const database_id = 'mouthyukyuk';
+  firestore.baseUrl =
+    `https://firestore.googleapis.com/v1/projects/` +
+    `${creds.project_id}/databases/${database_id}/documents/`;
   return firestore;
 }
 
@@ -39,7 +41,7 @@ function syncToFirebase() {
   const sheet = ss.getSheetByName("墨水/閃粉"); // Replace with your actual tab name
   const dataRange = sheet.getDataRange();
   const values = dataRange.getValues();
-  const idx = getColumnIndices(sheet);
+  const idx = getFirebaseColumnIndices_(sheet);
   
   // Initialize Firestore & Properties
   const db = initializeFirebase();
@@ -85,7 +87,15 @@ function syncToFirebase() {
     const currentCollection = currentName.includes(" - ") ? currentName.split(" - ")[0].trim() : currentName;
     let currentStatus = row[idx.status]?.toString().trim();
     const currentPrice = row[idx.price];
-    const currentImageURL = row[idx.image_url]?.toString().split(",").map(t => t.replace(/\s*拍照\s*/g, "").trim()).filter(t => t) || [];
+    const currentImageURL =
+      row[idx.image_url]
+          ?.toString()
+          .split(',')
+          .map((text) => {
+            return text.replace(/\s*拍照\s*/g, '').trim();
+          })
+          .filter(Boolean) ||
+      [];
 
     // Initialize validation
     let failureReasons = [];
@@ -144,7 +154,15 @@ function syncToFirebase() {
       ink_glitter_color: row[idx.ink_glitter_color]?.toString(),
       ink_sheen_color: row[idx.ink_sheen_color]?.toString(),
       label_tag: row[idx.label_tag]?.toString().split(",").map(t => t.trim()).filter(t => t) || [],
-      image_url: row[idx.image_url]?.toString().split(",").map(t => t.replace(/\s*拍照\s*/g, "").trim()).filter(t => t) || [],
+      image_url:
+        row[idx.image_url]
+            ?.toString()
+            .split(',')
+            .map((text) => {
+              return text.replace(/\s*拍照\s*/g, '').trim();
+            })
+            .filter(Boolean) ||
+        [],
       desc_chi: row[idx.desc_chi]?.toString(),
       desc_eng: row[idx.desc_eng]?.toString(),
       status: currentStatus,
@@ -223,13 +241,22 @@ function resetSyncProgress() {
 /**
  * 輔助函數：獲取標題列索引
  */
-function getColumnIndices(sheet) {
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+function getFirebaseColumnIndices_(sheet) {
+  const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0];
+
   const idx = {};
+
   headers.forEach((header, index) => {
-    const key = header.toString().toLowerCase().trim().replace(/ /g, "_");
+    const key = header
+        .toString()
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, '_');
+
     idx[key] = index;
   });
+
   return idx;
 }
-

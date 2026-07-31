@@ -3,15 +3,29 @@ const APP = Object.freeze({
   apiVersion: '2026-07',
   imageRootFolder: '嘴郁郁 Image',
   maxImageEdge: 2048,
-  requiredProductFields: ['title', 'handle', 'vendor', 'productType'],
+  requiredProductFields: [
+    'itemId',
+    'title',
+    'handle',
+    'vendor',
+    'productType',
+    'status',
+  ],
   requiredVariantFields: ['sku', 'price', 'inventory'],
   sheetAliases: Object.freeze({
+    itemId: ['ID', 'Item ID'],
     title: ['English Name', 'Title'],
     chineseName: ['Chinese Name'],
     handle: ['Handle'],
     vendor: ['Brand', 'Vendor'],
     collection: ['Collection'],
     productType: ['Product Type', 'Type'],
+    status: ['Status', 'Shopify Status'],
+    storageLocation: ['Storage Location', 'Storage'],
+    inkSize: ['Ink Size', 'Size'],
+    baseColors: ['Ink Base Color', 'Ink Base Colors'],
+    glitterColors: ['Ink Glitter Color', 'Ink Glitter Colors'],
+    sheenColors: ['Ink Sheen Color', 'Ink Sheen Colors'],
     descriptionHtml: ['Desc', 'Description', 'Body HTML', 'Body (HTML)'],
     tags: ['Label Tag', 'Tags'],
     sku: ['SKU', 'Variant SKU'],
@@ -23,6 +37,79 @@ const APP = Object.freeze({
     lastUpdated: ['Last Updated'],
     uploadResult: ['Upload Result'],
   }),
+});
+
+const EDITOR_DEFAULT_OPTIONS = Object.freeze({
+  statuses: ['DRAFT', 'ACTIVE', 'ARCHIVED'],
+  baseColors: [
+    'Amber Yellow',
+    'Black',
+    'Brick Red',
+    'Caramel Brown',
+    'Dark Blue',
+    'Dark Brown',
+    'Dark Green',
+    'Dark Purple',
+    'Dark Red',
+    'Emerald Green',
+    'Forest Green',
+    'Grey',
+    'Indigo',
+    'Lavender',
+    'Light Brown',
+    'Light Yellow',
+    'Lilac',
+    'Magenta',
+    'Mint Blue',
+    'Moss Green',
+    'Mud Brown',
+    'Mustard Yellow',
+    'Navy Blue',
+    'Neon Pink',
+    'Ochre Yellow',
+    'Olive Green',
+    'Orange',
+    'Paris Green',
+    'Pastel Blue',
+    'Pastel Green',
+    'Peach Pink',
+    'Rose Pink',
+    'Sapphire Blue',
+    'Scarlet Red',
+    'Silver',
+    'Sky Blue',
+    'Smalt Blue',
+    'Teal Blue',
+    'Vanilla White',
+    'Violet',
+    'White',
+    'Wine Red',
+  ],
+  glitterColors: [
+    'Red Glitter',
+    'Green Glitter',
+    'Blue Glitter',
+    'Gold Glitter',
+    'Silver Glitter',
+    'Violet Glitter',
+    'Rose Glitter',
+    'Pink Glitter',
+    'Grey Glitter',
+  ],
+  sheenColors: [
+    'Green Sheen',
+    'Black Sheen',
+    'Blue Sheen',
+    'Brown Sheen',
+    'Gold Sheen',
+    'Grey Sheen',
+    'Orange Sheen',
+    'Pink Sheen',
+    'Purple Sheen',
+    'Red Sheen',
+    'Violet Sheen',
+    'Yellow Sheen',
+  ],
 });
 
 function onOpen() {
@@ -73,14 +160,105 @@ function splitList_(value) {
   return clean_(value).split(/[,;\n|]+/).map(clean_).filter(Boolean);
 }
 
-function normalizeEditorTags_(value) {
-  if (Array.isArray(value)) {
-    return value
-        .map((tag) => clean_(tag))
-        .filter(Boolean);
-  }
+function normalizeEditorList_(value) {
+  const values = Array.isArray(value) ? value : splitList_(value);
+  const seen = {};
 
-  return splitList_(value);
+  return values
+      .map((item) => clean_(item))
+      .filter(Boolean)
+      .filter((item) => {
+        const key = item.toUpperCase();
+
+        if (seen[key]) {
+          return false;
+        }
+
+        seen[key] = true;
+        return true;
+      });
+}
+
+function normalizeEditorTags_(value) {
+  return normalizeEditorList_(value);
+}
+
+function getEditorOptions() {
+  const spreadsheet = SpreadsheetApp.getActive();
+  const valuesByKey = {
+    brands: [],
+    productTypes: [],
+    tags: [],
+    storageLocations: [],
+    inkSizes: [],
+    baseColors: EDITOR_DEFAULT_OPTIONS.baseColors.slice(),
+    glitterColors: EDITOR_DEFAULT_OPTIONS.glitterColors.slice(),
+    sheenColors: EDITOR_DEFAULT_OPTIONS.sheenColors.slice(),
+  };
+
+  const fieldMap = {
+    brands: 'vendor',
+    productTypes: 'productType',
+    tags: 'tags',
+    storageLocations: 'storageLocation',
+    inkSizes: 'inkSize',
+    baseColors: 'baseColors',
+    glitterColors: 'glitterColors',
+    sheenColors: 'sheenColors',
+  };
+
+  spreadsheet.getSheets().forEach((sheet) => {
+    if (
+      sheet.getLastColumn() < 1 ||
+      sheet.getLastRow() < 2 ||
+      sheet.getName().startsWith('Shopify ')
+    ) {
+      return;
+    }
+
+    const rows = sheet.getDataRange().getDisplayValues();
+    const index = getSheetIndex_(sheet);
+
+    Object.keys(fieldMap).forEach((optionKey) => {
+      const field = fieldMap[optionKey];
+      const column = aliasColumn_(index, APP.sheetAliases[field]);
+
+      if (column < 0) {
+        return;
+      }
+
+      rows.slice(1).forEach((row) => {
+        const sourceValue = row[column];
+        const additions =
+          field === 'tags' ||
+          field === 'baseColors' ||
+          field === 'glitterColors' ||
+          field === 'sheenColors'
+            ? splitList_(sourceValue)
+            : [clean_(sourceValue)];
+
+        valuesByKey[optionKey].push(...additions);
+      });
+    });
+  });
+
+  Object.keys(valuesByKey).forEach((key) => {
+    valuesByKey[key] = normalizeEditorList_(valuesByKey[key])
+        .sort((left, right) => {
+          return left.localeCompare(
+              right,
+              undefined,
+              {sensitivity: 'base'});
+        });
+  });
+
+  return Object.assign(valuesByKey, {
+    statuses: EDITOR_DEFAULT_OPTIONS.statuses.slice(),
+    sheetNames: spreadsheet.getSheets()
+        .map((sheet) => sheet.getName())
+        .filter((name) => !name.startsWith('Shopify '))
+        .sort(),
+  });
 }
 
 function safeFilePart_(value) {
@@ -142,8 +320,17 @@ function getOrCreateFolder_(parent, name) {
 
 function getImageFolder_(brand, collection) {
   const roots = DriveApp.getFoldersByName(APP.imageRootFolder);
-  const root = roots.hasNext() ? roots.next() : DriveApp.createFolder(APP.imageRootFolder);
-  return getOrCreateFolder_(getOrCreateFolder_(root, safeFilePart_(brand) || 'Unknown Brand'), safeFilePart_(collection) || 'Unsorted');
+  const root = roots.hasNext()
+    ? roots.next()
+    : DriveApp.createFolder(APP.imageRootFolder);
+
+  const brandFolder = getOrCreateFolder_(
+      root,
+      safeFilePart_(brand) || 'Unknown Brand');
+
+  return getOrCreateFolder_(
+      brandFolder,
+      safeFilePart_(collection) || 'Unsorted');
 }
 
 function escapeRegex_(value) {
@@ -206,7 +393,7 @@ function listDriveImages_(brand, collection, productTitle) {
       downloadUrl:
         `https://drive.google.com/uc?export=view&id=${file.getId()}`,
       source: 'DRIVE',
-      pendingUpload: true,
+      pendingUpload: false,
     });
   }
 
@@ -316,20 +503,43 @@ function removeDriveImage(fileId) {
   return {removed: name};
 }
 
+function getDefaultEditorTargetSheet_(spreadsheet) {
+  const activeSheet = spreadsheet.getActiveSheet();
+
+  if (!activeSheet.getName().startsWith('Shopify ')) {
+    return activeSheet;
+  }
+
+  const sourceSheet = spreadsheet.getSheets().find((sheet) => {
+    return !sheet.getName().startsWith('Shopify ');
+  });
+
+  return sourceSheet || activeSheet;
+}
+
 function blankEditorModel() {
   const spreadsheet = SpreadsheetApp.getActive();
-  const activeSheet = spreadsheet.getActiveSheet();
+  const targetSheet =
+    getDefaultEditorTargetSheet_(spreadsheet);
 
   return {
     id: '',
+    itemId: '',
     title: '',
+    chineseName: '',
     handle: '',
     vendor: '',
     collection: '',
     productType: '',
     status: 'DRAFT',
+    storageLocation: '',
+    inkSize: '',
+    baseColors: [],
+    glitterColors: [],
+    sheenColors: [],
     tags: [],
     descriptionHtml: '',
+    isNew: true,
 
     variants: [{
       id: '',
@@ -341,6 +551,7 @@ function blankEditorModel() {
       inventory: '',
       inventoryItemId: '',
       tracked: true,
+      writeInventory: true,
       optionValues: [],
     }],
 
@@ -349,8 +560,8 @@ function blankEditorModel() {
     sourceRows: [],
 
     sourceSpreadsheetId: spreadsheet.getId(),
-    targetSheetName: activeSheet.getName(),
-    targetSheetId: activeSheet.getSheetId(),
+    targetSheetName: targetSheet.getName(),
+    targetSheetId: targetSheet.getSheetId(),
   };
 }
 
@@ -362,6 +573,14 @@ function validateEditorModel_(model) {
       errors[key] = 'Required';
     }
   });
+
+  if (
+    model.status &&
+    EDITOR_DEFAULT_OPTIONS.statuses.indexOf(
+        clean_(model.status).toUpperCase()) === -1
+  ) {
+    errors.status = 'Choose Draft, Active, or Archived';
+  }
 
   if (!(model.variants || []).length) {
     errors.variants = 'At least one variant is required';
@@ -404,14 +623,15 @@ function validateEditorModel_(model) {
 function saveCatalogProduct(model) {
   model = model || {};
 
-  model.tags =
-  normalizeEditorTags_(model.tags);
+  model.tags = normalizeEditorTags_(model.tags);
+  model.baseColors = normalizeEditorList_(model.baseColors);
+  model.glitterColors = normalizeEditorList_(model.glitterColors);
+  model.sheenColors = normalizeEditorList_(model.sheenColors);
+  model.status = clean_(model.status || 'DRAFT').toUpperCase();
 
-  model.handle =
-    slugify_(model.handle || model.title);
+  model.handle = slugify_(model.handle || model.title);
 
-  model.collection =
-    deriveCollectionName_(model.title);
+  model.collection = deriveCollectionName_(model.title);
 
   const incomingDriveImages =
     model.driveImages || [];
@@ -465,8 +685,7 @@ function saveCatalogProduct(model) {
       'At least one product image is required';
   }
 
-  const spreadsheet =
-  SpreadsheetApp.getActiveSpreadsheet();
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
 
   if (!spreadsheet) {
     throw new Error(
@@ -484,6 +703,35 @@ function saveCatalogProduct(model) {
     errors.targetSheetName =
       'Choose an existing source sheet';
   }
+
+  if (!model.id) {
+    const existingHandle =
+      findEditorProductByHandle_(model.handle);
+
+    if (existingHandle) {
+      errors.handle =
+        `Already used by ${existingHandle.title}. ` +
+        'Search for that product and edit it instead.';
+    }
+  }
+
+  (model.variants || []).forEach((variant, index) => {
+    const matches = findEditorVariantsBySku_(
+        clean_(variant.sku));
+
+    const conflictingMatches = matches.filter((match) => {
+      return clean_(match.id) !== clean_(variant.id);
+    });
+
+    if (conflictingMatches.length > 0) {
+      errors[`variant_${index}_sku`] =
+        `SKU already belongs to ${
+          conflictingMatches
+              .map((match) => match.productTitle)
+              .join(', ')
+        }`;
+    }
+  });
 
   if (Object.keys(errors).length) {
     return {
@@ -511,6 +759,7 @@ function saveCatalogProduct(model) {
   });
 
   let productId = clean_(model.id);
+  const wasNewProduct = !productId;
   let initialVariantId = '';
 
   if (productId) {
@@ -542,6 +791,7 @@ function saveCatalogProduct(model) {
   model.variants.forEach((variant, index) => {
     const candidate =
       Object.assign({}, variant);
+    const wasNewVariant = !candidate.id;
 
     if (
       !candidate.id &&
@@ -566,33 +816,61 @@ function saveCatalogProduct(model) {
       candidate.inventoryItemId ||
       '';
 
-    try {
-      const inventoryResult =
-        setAndVerifyShopifyInventory_(
-            accessToken,
-            candidate.inventoryItemId,
-            locationId,
-            Number(candidate.inventory),
-            `${model.handle}:${candidate.sku}`);
+    const shouldWriteInventory =
+      wasNewProduct ||
+      wasNewVariant ||
+      candidate.writeInventory === true;
 
-      candidate.inventory =
-        inventoryResult.quantity;
+    if (shouldWriteInventory) {
+      try {
+        const inventoryResult =
+          setAndVerifyShopifyInventory_(
+              accessToken,
+              candidate.inventoryItemId,
+              locationId,
+              Number(candidate.inventory),
+              `${model.handle}:${candidate.sku}`);
 
-      candidate.editorResult =
-        `INVENTORY_VERIFIED=${inventoryResult.quantity}`;
-    } catch (error) {
-      candidate.editorResult =
-        `INVENTORY_FAILED: ${error.message}`;
+        candidate.inventory =
+          inventoryResult.quantity;
 
-      warnings.push(
-          `${candidate.sku}: ${candidate.editorResult}`);
+        candidate.editorResult =
+          `INVENTORY_VERIFIED=${inventoryResult.quantity}`;
+      } catch (error) {
+        candidate.editorResult =
+          `INVENTORY_FAILED: ${error.message}`;
+
+        warnings.push(
+            `${candidate.sku}: ${candidate.editorResult}`);
+      }
+    } else {
+      candidate.editorResult = 'INVENTORY_NOT_CHANGED';
     }
 
+    candidate.writeInventory = false;
     savedVariants.push(candidate);
   });
 
   model.variants =
     savedVariants;
+
+  try {
+    setShopifyProductMetafields_(
+        accessToken,
+        productId,
+        {
+          itemId: clean_(model.itemId),
+          chineseName: clean_(model.chineseName),
+          storageLocation: clean_(model.storageLocation),
+          inkSize: clean_(model.inkSize),
+          baseColors: model.baseColors,
+          glitterColors: model.glitterColors,
+          sheenColors: model.sheenColors,
+        });
+  } catch (error) {
+    warnings.push(
+        `METAFIELDS_FAILED: ${error.message}`);
+  }
 
   try {
     attachImagesToProduct_(
@@ -627,6 +905,7 @@ function saveCatalogProduct(model) {
         overallResult);
 
   SpreadsheetApp.flush();
+  model.isNew = false;
 
   let refreshedProduct;
 
@@ -651,9 +930,23 @@ function saveCatalogProduct(model) {
 }
 
 function getSheetIndex_(sheet) {
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  if (sheet.getLastColumn() < 1) {
+    return {};
+  }
+
+  const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getDisplayValues()[0];
   const index = {};
-  headers.forEach((h, i) => index[clean_(h).toLowerCase().replace(/\s+/g, '_')] = i);
+
+  headers.forEach((header, position) => {
+    index[
+        clean_(header)
+            .toLowerCase()
+            .replace(/\s+/g, '_')
+    ] = position;
+  });
+
   return index;
 }
 
@@ -679,10 +972,77 @@ function findSourceRows_(product) {
     for (let i = 1; i < values.length; i++) {
       const skuMatch = skuCol >= 0 && skus.has(clean_(values[i][skuCol]).toUpperCase());
       const handleMatch = handleCol >= 0 && slugify_(values[i][handleCol]) === slugify_(product.handle);
-      if (skuMatch || handleMatch) found.push({sheetName: sheet.getName(), row: i + 1, sku: skuCol >= 0 ? values[i][skuCol] : ''});
+      if (skuMatch || handleMatch) {
+        found.push({
+          sheetName: sheet.getName(),
+          row: i + 1,
+          sku:
+            skuCol >= 0
+              ? values[i][skuCol]
+              : '',
+        });
+      }
     }
   });
   return found;
+}
+
+function getAliasedSheetValue_(row, index, field) {
+  const column = aliasColumn_(
+      index,
+      APP.sheetAliases[field]);
+
+  return column >= 0
+    ? clean_(row[column])
+    : '';
+}
+
+function applySourceFieldsToProduct_(product, sheet, rowNumber) {
+  if (!sheet || rowNumber < 2) {
+    return product;
+  }
+
+  const values = sheet
+      .getRange(
+          rowNumber,
+          1,
+          1,
+          Math.max(1, sheet.getLastColumn()))
+      .getDisplayValues()[0];
+
+  const index = getSheetIndex_(sheet);
+  const scalarFields = [
+    'itemId',
+    'chineseName',
+    'storageLocation',
+    'inkSize',
+  ];
+
+  scalarFields.forEach((field) => {
+    if (!clean_(product[field])) {
+      product[field] =
+        getAliasedSheetValue_(
+            values,
+            index,
+            field);
+    }
+  });
+
+  [
+    'baseColors',
+    'glitterColors',
+    'sheenColors',
+  ].forEach((field) => {
+    if (!normalizeEditorList_(product[field]).length) {
+      product[field] = normalizeEditorList_(
+          getAliasedSheetValue_(
+              values,
+              index,
+              field));
+    }
+  });
+
+  return product;
 }
 
 function hydrateEditorProduct_(product) {
@@ -718,13 +1078,23 @@ function hydrateEditorProduct_(product) {
       sourceSheet
         ? sourceSheet.getSheetId()
         : '';
+
+    applySourceFieldsToProduct_(
+        product,
+        sourceSheet,
+        Number(firstSource.row));
   } else {
+    const targetSheet =
+      getDefaultEditorTargetSheet_(spreadsheet);
+
     product.targetSheetName =
-      spreadsheet.getActiveSheet().getName();
+      targetSheet.getName();
 
     product.targetSheetId =
-      spreadsheet.getActiveSheet().getSheetId();
+      targetSheet.getSheetId();
   }
+
+  product.isNew = false;
 
   return product;
 }
@@ -832,12 +1202,54 @@ function writeProductToSource_(
 }
 
 function appendSourceRow_(ss, model, variant) {
-  const sheetName = clean_(model.targetSheetName) || (ss.getActiveSheet().getName() !== 'Shopify Catalog Editor' ? ss.getActiveSheet().getName() : 'Products');
+  const activeSheetName = ss.getActiveSheet().getName();
+  const sheetName =
+    clean_(model.targetSheetName) ||
+    (
+      activeSheetName !== 'Shopify Catalog Editor'
+        ? activeSheetName
+        : 'Products'
+    );
+
   let sheet = ss.getSheetByName(sheetName);
-  if (!sheet) sheet = ss.insertSheet(sheetName);
-  if (sheet.getLastColumn() === 0) sheet.getRange(1, 1, 1, 16).setValues([[
-    'English Name','Chinese Name','Brand','Collection','Product Type','Handle','SKU','Price','Inventory','Desc','Tags','Image URLs','Shopify Product GID','Shopify Variant GID','Last Updated','Upload Result'
-  ]]);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  if (sheet.getLastColumn() === 0) {
+    const headers = [
+      'ID',
+      'English Name',
+      'Chinese Name',
+      'Brand',
+      'Collection',
+      'Product Type',
+      'Status',
+      'Storage Location',
+      'Ink Size',
+      'Ink Base Color',
+      'Ink Glitter Color',
+      'Ink Sheen Color',
+      'Handle',
+      'SKU',
+      'Price',
+      'Inventory',
+      'Desc',
+      'Tags',
+      'Image URLs',
+      'Shopify Product GID',
+      'Shopify Variant GID',
+      'Last Updated',
+      'Upload Result',
+    ];
+
+    sheet
+        .getRange(1, 1, 1, headers.length)
+        .setValues([headers])
+        .setFontWeight('bold');
+  }
+
   return {sheetName, row: Math.max(2, sheet.getLastRow() + 1)};
 }
 
@@ -850,23 +1262,53 @@ function ensureAliasColumn_(sheet, index, field) {
   return col;
 }
 
-function writeMappedRow_(sheet, rowNumber, model, variant) {
+function writeMappedRow_(
+    sheet,
+    rowNumber,
+    model,
+    variant,
+    overallResult) {
   const index = getSheetIndex_(sheet);
   const values = {
-    title: model.title, handle: model.handle, vendor: model.vendor,
-    collection: deriveCollectionName_(model.title), productType: model.productType,
-    descriptionHtml: model.descriptionHtml, 
-    tags:
-      normalizeEditorTags_(
-        model.tags).join(', '),
-    sku: variant.sku, price: variant.price,
-    inventory: variant.inventory == null ? '' : variant.inventory,
-    imageUrls: (model.driveImages || []).map(i => i.driveUrl).join('\n'),
-    productGid: model.id, variantGid: variant.id,
-    lastUpdated: new Date(), uploadResult: 'SAVED_FROM_EDITOR',
+    itemId: clean_(model.itemId),
+    title: clean_(model.title),
+    chineseName: clean_(model.chineseName),
+    handle: clean_(model.handle),
+    vendor: clean_(model.vendor),
+    collection: deriveCollectionName_(model.title),
+    productType: clean_(model.productType),
+    status: clean_(model.status),
+    storageLocation: clean_(model.storageLocation),
+    inkSize: clean_(model.inkSize),
+    baseColors: normalizeEditorList_(model.baseColors).join(', '),
+    glitterColors: normalizeEditorList_(model.glitterColors).join(', '),
+    sheenColors: normalizeEditorList_(model.sheenColors).join(', '),
+    descriptionHtml: clean_(model.descriptionHtml),
+    tags: normalizeEditorTags_(model.tags).join(', '),
+    sku: clean_(variant.sku),
+    price: clean_(variant.price),
+    inventory:
+      variant.inventory == null
+        ? ''
+        : variant.inventory,
+    imageUrls: (model.driveImages || [])
+        .map((image) => clean_(image.driveUrl))
+        .filter(Boolean)
+        .join('\n'),
+    productGid: clean_(model.id),
+    variantGid: clean_(variant.id),
+    lastUpdated: new Date(),
+    uploadResult:
+      clean_(overallResult) ||
+      clean_(variant.editorResult) ||
+      'SAVED_FROM_EDITOR',
   };
-  Object.keys(values).forEach(field => {
-    if (!APP.sheetAliases[field]) return;
+
+  Object.keys(values).forEach((field) => {
+    if (!APP.sheetAliases[field]) {
+      return;
+    }
+
     const col = ensureAliasColumn_(sheet, index, field);
     sheet.getRange(rowNumber, col + 1).setValue(values[field]);
   });
@@ -887,7 +1329,14 @@ function shopifyGraphql_(query, variables) {
     throw new Error(`Shopify returned invalid JSON (${code}).`);
   }
   if (code < 200 || code >= 300) throw new Error(`Shopify HTTP ${code}: ${JSON.stringify(body)}`);
-  if (body.errors && body.errors.length) throw new Error(`Shopify GraphQL: ${body.errors.map(e => e.message).join(' | ')}`);
+  if (body.errors && body.errors.length) {
+    throw new Error(
+        `Shopify GraphQL: ${
+          body.errors
+              .map((error) => error.message)
+              .join(' | ')
+        }`);
+  }
   return body.data;
 }
 
@@ -916,6 +1365,84 @@ function getShopifyToken_() {
 function throwUserErrors_(errors, operation) {
   if (!errors || !errors.length) return;
   throw new Error(`${operation}: ${errors.map(e => `${(e.field || []).join('.')}: ${e.message}`).join(' | ')}`);
+}
+
+function findEditorProductByHandle_(handle) {
+  const normalizedHandle = slugify_(handle);
+
+  if (!normalizedHandle) {
+    return null;
+  }
+
+  const query = `
+    query EditorProductByHandle(
+      $identifier: ProductIdentifierInput!
+    ) {
+      productByIdentifier(identifier: $identifier) {
+        id
+        title
+        handle
+      }
+    }
+  `;
+
+  return shopifyGraphql_(
+      query,
+      {
+        identifier: {
+          handle: normalizedHandle,
+        },
+      }).productByIdentifier || null;
+}
+
+function findEditorVariantsBySku_(sku) {
+  const normalizedSku = clean_(sku).toUpperCase();
+
+  if (!normalizedSku) {
+    return [];
+  }
+
+  const escapedSku = normalizedSku
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"');
+
+  const query = `
+    query EditorVariantsBySku(
+      $query: String!
+    ) {
+      productVariants(
+        first: 20,
+        query: $query
+      ) {
+        nodes {
+          id
+          sku
+          product {
+            id
+            title
+            handle
+          }
+        }
+      }
+    }
+  `;
+
+  const nodes = shopifyGraphql_(
+      query,
+      {
+        query: `sku:"${escapedSku}"`,
+      }).productVariants.nodes || [];
+
+  return nodes
+      .filter((variant) => {
+        return clean_(variant.sku).toUpperCase() === normalizedSku;
+      })
+      .map((variant) => ({
+        id: variant.id,
+        productId: variant.product.id,
+        productTitle: variant.product.title,
+        productHandle: variant.product.handle,
+      }));
 }
 
 function searchShopifyCatalog(searchText) {
@@ -959,6 +1486,17 @@ function loadShopifyProduct(productId) {
         status
         tags
         descriptionHtml
+
+        metafields(
+          first: 20,
+          namespace: "custom"
+        ) {
+          nodes {
+            key
+            type
+            value
+          }
+        }
 
         media(first: 50) {
           nodes {
@@ -1068,17 +1606,77 @@ function getVariantAvailableQuantity_(variant) {
   return 0;
 }
 
+function getEditorMetafieldValue_(product, key) {
+  const nodes =
+    product.metafields &&
+    Array.isArray(product.metafields.nodes)
+      ? product.metafields.nodes
+      : [];
+
+  const metafield = nodes.find((item) => {
+    return item.key === key;
+  });
+
+  return metafield
+    ? clean_(metafield.value)
+    : '';
+}
+
+function getEditorMetafieldList_(product, key) {
+  const value = getEditorMetafieldValue_(
+      product,
+      key);
+
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+
+    if (Array.isArray(parsed)) {
+      return normalizeEditorList_(parsed);
+    }
+  } catch (error) {
+    // Older values might have been stored as comma-separated text.
+  }
+
+  return normalizeEditorList_(value);
+}
+
 function normalizeShopifyProduct_(product) {
   return {
     id: product.id,
+    itemId: getEditorMetafieldValue_(
+        product,
+        MYK_SHOPIFY.itemIdMetafieldKey),
     title: product.title,
+    chineseName: getEditorMetafieldValue_(
+        product,
+        MYK_SHOPIFY.chineseNameMetafieldKey),
     handle: product.handle,
     vendor: product.vendor || '',
     productType: product.productType || '',
     status: product.status || 'DRAFT',
+    storageLocation: getEditorMetafieldValue_(
+        product,
+        MYK_SHOPIFY.storageLocationMetafieldKey),
+    inkSize: getEditorMetafieldValue_(
+        product,
+        MYK_SHOPIFY.inkSizeMetafieldKey),
+    baseColors: getEditorMetafieldList_(
+        product,
+        MYK_SHOPIFY.baseColorsMetafieldKey),
+    glitterColors: getEditorMetafieldList_(
+        product,
+        MYK_SHOPIFY.glitterColorsMetafieldKey),
+    sheenColors: getEditorMetafieldList_(
+        product,
+        MYK_SHOPIFY.sheenColorsMetafieldKey),
     tags: product.tags || [],
     descriptionHtml:
       product.descriptionHtml || '',
+    isNew: false,
     options: product.options || [],
 
     images:
@@ -1149,19 +1747,60 @@ function normalizeShopifyProduct_(product) {
             tracked: Boolean(
                 variant.inventoryItem &&
                 variant.inventoryItem.tracked),
+
+            writeInventory: false,
           })),
   };
 }
 
 function createProduct_(model) {
-  const mutation = `mutation CreateProduct($product: ProductCreateInput!) {
-    productCreate(product: $product) { product { id title handle variants(first: 1) { nodes { id inventoryItem { id } } } }
-      userErrors { field message } }
-  }`;
-  const input = productInput_(model); input.status = model.status || 'DRAFT';
+  const mutation = `
+    mutation CreateProduct(
+      $product: ProductCreateInput!
+    ) {
+      productCreate(product: $product) {
+        product {
+          id
+          title
+          handle
+          variants(first: 1) {
+            nodes {
+              id
+              inventoryItem {
+                id
+              }
+            }
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const input = productInput_(model);
+  input.status = model.status || 'DRAFT';
+
   if (model.optionNames && model.optionNames.length) {
-    input.productOptions = model.optionNames.map(name => ({name, values: [{name: model.variants[0].optionValues.find(v => v.optionName === name)?.name || 'Default'}]}));
+    input.productOptions = model.optionNames.map((name) => {
+      const option = model.variants[0].optionValues.find((value) => {
+        return value.optionName === name;
+      });
+
+      return {
+        name,
+        values: [{
+          name:
+            option && option.name
+              ? option.name
+              : 'Default',
+        }],
+      };
+    });
   }
+
   const result = shopifyGraphql_(mutation, {product: input}).productCreate;
   throwUserErrors_(result.userErrors, 'productCreate');
   const initial = result.product.variants.nodes[0];
@@ -1180,12 +1819,13 @@ function updateProduct_(model) {
 
 function productInput_(model) {
   return {
-    title: clean_(model.title), handle: slugify_(model.handle || model.title),
-    vendor: clean_(model.vendor), productType: clean_(model.productType),
-    descriptionHtml: clean_(model.descriptionHtml), 
-    tags:
-      normalizeEditorTags_(
-        model.tags),
+    title: clean_(model.title),
+    handle: slugify_(model.handle || model.title),
+    vendor: clean_(model.vendor),
+    productType: clean_(model.productType),
+    status: clean_(model.status || 'DRAFT').toUpperCase(),
+    descriptionHtml: clean_(model.descriptionHtml),
+    tags: normalizeEditorTags_(model.tags),
   };
 }
 
@@ -1214,9 +1854,26 @@ function saveVariant_(productId, variant, isNew) {
 }
 
 function uploadBlobToShopify_(blob) {
-  const mutation = `mutation Stage($input: [StagedUploadInput!]!) {
-    stagedUploadsCreate(input: $input) { stagedTargets { url resourceUrl parameters { name value } } userErrors { field message } }
-  }`;
+  const mutation = `
+    mutation Stage(
+      $input: [StagedUploadInput!]!
+    ) {
+      stagedUploadsCreate(input: $input) {
+        stagedTargets {
+          url
+          resourceUrl
+          parameters {
+            name
+            value
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
   const stage = shopifyGraphql_(mutation, {input: [{
     filename: blob.getName(), mimeType: blob.getContentType(), resource: 'PRODUCT_IMAGE', httpMethod: 'POST',
   }]}).stagedUploadsCreate;
