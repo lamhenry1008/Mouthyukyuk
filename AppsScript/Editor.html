@@ -320,6 +320,7 @@
     >
     <button onclick="search()">Search</button>
     <button onclick="newProduct()">New product</button>
+    <button onclick="openCheckout()">Checkout</button>
     <button class="primary" onclick="save()">Save to Shopify + Sheet</button>
     <span id="status" class="status"></span>
   </div>
@@ -367,6 +368,18 @@
       }
 
       return editorOptions;
+    }
+
+    async function openCheckout() {
+      setBusy(true, 'Opening checkout…');
+
+      try {
+        await call('showCheckoutDialog');
+        google.script.host.close();
+      } catch (error) {
+        alert(error.message || error);
+        setBusy(false);
+      }
     }
 
     async function search() {
@@ -458,6 +471,62 @@
           return String(candidate).trim().toUpperCase() === normalized;
         }) === index;
       });
+    }
+
+    const itemTypeCodes = Object.freeze({
+      'INK': 'INK',
+      'FOUNTAIN PEN INK': 'INK',
+      'GLITTER POTION': 'INK',
+      'FOUNTAIN PEN': 'PEN',
+      'DIP PEN': 'PEN',
+      'NOTEBOOK': 'NOTEBOOK',
+      'PAPER': 'PAPER',
+      'ACCESSORY': 'ACCESSORY',
+    });
+
+    function buildAutomaticItemId(productType, sku) {
+      const typeKey = String(productType || '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .toUpperCase();
+
+      const typeCode = itemTypeCodes[typeKey] || typeKey
+        .replace(/[^A-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+      const skuCode = String(sku || '')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^A-Z0-9-]+/g, '')
+        .replace(/-{2,}/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+      return typeCode && skuCode
+        ? `${typeCode}-${skuCode}`
+        : '';
+    }
+
+    function refreshAutomaticItemId() {
+      if (!model || model.isNew !== true) {
+        return;
+      }
+
+      model.itemId = buildAutomaticItemId(
+        model.productType,
+        model.variants && model.variants[0]
+          ? model.variants[0].sku
+          : ''
+      );
+
+      const itemIdInput = document.querySelector(
+        '[data-key="itemId"]'
+      );
+
+      if (itemIdInput) {
+        itemIdInput.value = model.itemId;
+      }
     }
 
     function field(
@@ -616,9 +685,25 @@
         ? model.title.split(' - ')[0].trim()
         : (model.title || '');
 
+      if (model.isNew === true) {
+        model.itemId = buildAutomaticItemId(
+          model.productType,
+          model.variants && model.variants[0]
+            ? model.variants[0].sku
+            : ''
+        );
+      }
+
       document.getElementById('editor').innerHTML = `
         <div class="grid">
-          ${field('itemId', 'Item ID *', model.itemId || '', 1)}
+          ${field(
+            'itemId',
+            'Item ID *',
+            model.itemId || '',
+            1,
+            'text',
+            model.isNew === true ? 'readonly' : ''
+          )}
           ${field('title', 'English Name *', model.title || '', 2)}
           ${selectField(
             'status',
@@ -960,6 +1045,10 @@
               collectionInput.value = model.collection;
             }
           }
+
+          if (element.dataset.key === 'productType') {
+            refreshAutomaticItemId();
+          }
         };
 
         element.oninput = update;
@@ -1025,6 +1114,13 @@
             variant.writeInventory = element.checked;
           } else {
             variant[key] = element.value;
+
+            if (
+              Number(element.dataset.v) === 0 &&
+              key === 'sku'
+            ) {
+              refreshAutomaticItemId();
+            }
           }
         };
 

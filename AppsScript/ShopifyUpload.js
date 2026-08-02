@@ -109,9 +109,9 @@ const MYK_TAXONOMY = Object.freeze({
    * The search phrase should resemble the final category name or breadcrumb.
    */
   productTypeSearchTerms: Object.freeze({
-    'INK': 'Ink',
-    'FOUNTAIN PEN INK': 'Ink',
-    'GLITTER POTION': 'Ink',
+    'INK': 'Pen Ink & Refills',
+    'FOUNTAIN PEN INK': 'Pen Ink & Refills',
+    'GLITTER POTION': 'Pen Ink & Refills',
     'FOUNTAIN PEN': 'Fountain Pens',
     'DIP PEN': 'Dip Pens',
     'NOTEBOOK': 'Notebooks',

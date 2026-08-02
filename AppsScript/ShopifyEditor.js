@@ -30,7 +30,17 @@ const APP = Object.freeze({
     tags: ['Label Tag', 'Tags'],
     sku: ['SKU', 'Variant SKU'],
     price: ['Price', 'Variant Price'],
-    inventory: ['Inventory', 'Stock'],
+    barcode: ['Barcode', 'Variant Barcode'],
+    inventory: ['Inventory'],
+    stock: ['Stock'],
+    cost: ['Cost'],
+    purchased: ['Purchased'],
+    sold: ['Sold'],
+    taxonomyCategoryId: [
+      'Shopify Taxonomy ID',
+      'Taxonomy ID',
+      'Shopify Category ID',
+    ],
     imageUrls: ['Image URL', 'Image URLs'],
     productGid: ['Shopify Product GID'],
     variantGid: ['Shopify Variant GID'],
@@ -38,6 +48,25 @@ const APP = Object.freeze({
     uploadResult: ['Upload Result'],
   }),
 });
+
+/**
+ * Internal item-type prefix used when a new Item ID is generated.
+ * Unknown product types fall back to an uppercase hyphenated product type.
+ */
+const EDITOR_ITEM_TYPE_CODES = Object.freeze({
+  'INK': 'INK',
+  'FOUNTAIN PEN INK': 'INK',
+  'GLITTER POTION': 'INK',
+  'FOUNTAIN PEN': 'PEN',
+  'DIP PEN': 'PEN',
+  'NOTEBOOK': 'NOTEBOOK',
+  'PAPER': 'PAPER',
+  'ACCESSORY': 'ACCESSORY',
+});
+
+const EDITOR_RESERVED_SHEET_NAMES = Object.freeze([
+  '訂單紀錄',
+]);
 
 const EDITOR_DEFAULT_OPTIONS = Object.freeze({
   statuses: ['DRAFT', 'ACTIVE', 'ARCHIVED'],
@@ -119,6 +148,8 @@ function onOpen() {
   ui.createMenu('Shopify Editor')
       .addItem('Open editor', 'showCatalogEditor')
       .addItem('Open new product', 'showNewProductEditor')
+      .addSeparator()
+      .addItem('Checkout', 'showCheckoutDialog')
       .addToUi();
 
   // Menu 2: Shopify Sync
@@ -183,6 +214,73 @@ function normalizeEditorTags_(value) {
   return normalizeEditorList_(value);
 }
 
+function normalizeEditorProductTypeKey_(value) {
+  return clean_(value)
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+}
+
+function getEditorItemTypeCode_(productType) {
+  const key = normalizeEditorProductTypeKey_(productType);
+
+  if (!key) {
+    return '';
+  }
+
+  return EDITOR_ITEM_TYPE_CODES[key] ||
+    key.replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function buildEditorItemId_(productType, sku) {
+  const typeCode = getEditorItemTypeCode_(productType);
+  const normalizedSku = clean_(sku)
+      .toUpperCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^A-Z0-9-]+/g, '')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+  return typeCode && normalizedSku
+    ? `${typeCode}-${normalizedSku}`
+    : '';
+}
+
+function resolveEditorTaxonomyCategoryId_(productType) {
+  if (
+    typeof resolveTaxonomyCategoryForProductType_ !== 'function'
+  ) {
+    return '';
+  }
+
+  return clean_(
+      resolveTaxonomyCategoryForProductType_(productType));
+}
+
+function directDriveImageUrl_(fileId) {
+  const id = clean_(fileId);
+  return id
+    ? `https://drive.google.com/uc?id=${encodeURIComponent(id)}`
+    : '';
+}
+
+/**
+ * Operational sheets must never be scanned or selected as product sources.
+ * In particular, 訂單紀錄 contains SKUs but its rows are order lines.
+ */
+function isCatalogSourceSheet_(sheet) {
+  if (!sheet) {
+    return false;
+  }
+
+  const name = sheet.getName();
+
+  return (
+    !name.startsWith('Shopify ') &&
+    EDITOR_RESERVED_SHEET_NAMES.indexOf(name) === -1
+  );
+}
+
 function getEditorOptions() {
   const spreadsheet = SpreadsheetApp.getActive();
   const valuesByKey = {
@@ -211,7 +309,7 @@ function getEditorOptions() {
     if (
       sheet.getLastColumn() < 1 ||
       sheet.getLastRow() < 2 ||
-      sheet.getName().startsWith('Shopify ')
+      !isCatalogSourceSheet_(sheet)
     ) {
       return;
     }
@@ -255,8 +353,8 @@ function getEditorOptions() {
   return Object.assign(valuesByKey, {
     statuses: EDITOR_DEFAULT_OPTIONS.statuses.slice(),
     sheetNames: spreadsheet.getSheets()
+        .filter(isCatalogSourceSheet_)
         .map((sheet) => sheet.getName())
-        .filter((name) => !name.startsWith('Shopify '))
         .sort(),
   });
 }
@@ -389,9 +487,8 @@ function listDriveImages_(brand, collection, productTitle) {
     output.push({
       id: file.getId(),
       name: file.getName(),
-      driveUrl: file.getUrl(),
-      downloadUrl:
-        `https://drive.google.com/uc?export=view&id=${file.getId()}`,
+      driveUrl: directDriveImageUrl_(file.getId()),
+      downloadUrl: directDriveImageUrl_(file.getId()),
       source: 'DRIVE',
       pendingUpload: false,
     });
@@ -472,9 +569,8 @@ function uploadEditorImage(payload) {
   const uploadedImage = {
     id: file.getId(),
     name: filename,
-    driveUrl: file.getUrl(),
-    downloadUrl:
-      `https://drive.google.com/uc?export=view&id=${file.getId()}`,
+    driveUrl: directDriveImageUrl_(file.getId()),
+    downloadUrl: directDriveImageUrl_(file.getId()),
     source: 'DRIVE',
     pendingUpload: true,
   };
@@ -506,12 +602,12 @@ function removeDriveImage(fileId) {
 function getDefaultEditorTargetSheet_(spreadsheet) {
   const activeSheet = spreadsheet.getActiveSheet();
 
-  if (!activeSheet.getName().startsWith('Shopify ')) {
+  if (isCatalogSourceSheet_(activeSheet)) {
     return activeSheet;
   }
 
   const sourceSheet = spreadsheet.getSheets().find((sheet) => {
-    return !sheet.getName().startsWith('Shopify ');
+    return isCatalogSourceSheet_(sheet);
   });
 
   return sourceSheet || activeSheet;
@@ -632,6 +728,19 @@ function saveCatalogProduct(model) {
   model.handle = slugify_(model.handle || model.title);
 
   model.collection = deriveCollectionName_(model.title);
+
+  const wasNewEditorProduct = !clean_(model.id);
+
+  if (wasNewEditorProduct || !clean_(model.itemId)) {
+    model.itemId = buildEditorItemId_(
+        model.productType,
+        model.variants && model.variants[0]
+          ? model.variants[0].sku
+          : '');
+  }
+
+  model.taxonomyCategoryId =
+    resolveEditorTaxonomyCategoryId_(model.productType);
 
   const incomingDriveImages =
     model.driveImages || [];
@@ -963,7 +1072,7 @@ function findSourceRows_(product) {
   const skus = new Set((product.variants || []).map(v => clean_(v.sku).toUpperCase()).filter(Boolean));
   const found = [];
   ss.getSheets().forEach(sheet => {
-    if (sheet.getName().startsWith('Shopify ')) return;
+    if (!isCatalogSourceSheet_(sheet)) return;
     const values = sheet.getDataRange().getDisplayValues();
     if (values.length < 2) return;
     const index = getSheetIndex_(sheet);
@@ -1190,7 +1299,8 @@ function writeProductToSource_(
         Number(target.row),
         model,
         variant,
-        overallResult || 'SAVED_FROM_EDITOR');
+        overallResult || 'SAVED_FROM_EDITOR',
+        target.isNew === true);
 
     results.push(
         `${target.sheetName}!${target.row}`);
@@ -1234,12 +1344,18 @@ function appendSourceRow_(ss, model, variant) {
       'Handle',
       'SKU',
       'Price',
+      'Barcode',
       'Inventory',
+      'Stock',
+      'Cost',
+      'Purchased',
+      'Sold',
       'Desc',
       'Tags',
       'Image URLs',
       'Shopify Product GID',
       'Shopify Variant GID',
+      'Shopify Taxonomy ID',
       'Last Updated',
       'Upload Result',
     ];
@@ -1250,7 +1366,11 @@ function appendSourceRow_(ss, model, variant) {
         .setFontWeight('bold');
   }
 
-  return {sheetName, row: Math.max(2, sheet.getLastRow() + 1)};
+  return {
+    sheetName,
+    row: Math.max(2, sheet.getLastRow() + 1),
+    isNew: true,
+  };
 }
 
 function ensureAliasColumn_(sheet, index, field) {
@@ -1267,16 +1387,22 @@ function writeMappedRow_(
     rowNumber,
     model,
     variant,
-    overallResult) {
+    overallResult,
+    isNewSourceRow) {
   const index = getSheetIndex_(sheet);
   const values = {
-    itemId: clean_(model.itemId),
+    itemId:
+      buildEditorItemId_(model.productType, variant.sku) ||
+      clean_(model.itemId),
     title: clean_(model.title),
     chineseName: clean_(model.chineseName),
     handle: clean_(model.handle),
     vendor: clean_(model.vendor),
     collection: deriveCollectionName_(model.title),
     productType: clean_(model.productType),
+    taxonomyCategoryId:
+      clean_(model.taxonomyCategoryId) ||
+      resolveEditorTaxonomyCategoryId_(model.productType),
     status: clean_(model.status),
     storageLocation: clean_(model.storageLocation),
     inkSize: clean_(model.inkSize),
@@ -1287,12 +1413,17 @@ function writeMappedRow_(
     tags: normalizeEditorTags_(model.tags).join(', '),
     sku: clean_(variant.sku),
     price: clean_(variant.price),
+    barcode: clean_(variant.barcode),
     inventory:
       variant.inventory == null
         ? ''
         : variant.inventory,
     imageUrls: (model.driveImages || [])
-        .map((image) => clean_(image.driveUrl))
+        .map((image) => {
+          return clean_(image.id)
+            ? directDriveImageUrl_(image.id)
+            : clean_(image.driveUrl);
+        })
         .filter(Boolean)
         .join('\n'),
     productGid: clean_(model.id),
@@ -1303,6 +1434,16 @@ function writeMappedRow_(
       clean_(variant.editorResult) ||
       'SAVED_FROM_EDITOR',
   };
+
+  if (isNewSourceRow === true) {
+    values.cost = 0;
+    values.purchased = 0;
+    values.sold = 0;
+    values.stock =
+      variant.inventory == null || clean_(variant.inventory) === ''
+        ? 0
+        : Number(variant.inventory);
+  }
 
   Object.keys(values).forEach((field) => {
     if (!APP.sheetAliases[field]) {
@@ -1818,7 +1959,7 @@ function updateProduct_(model) {
 }
 
 function productInput_(model) {
-  return {
+  const input = {
     title: clean_(model.title),
     handle: slugify_(model.handle || model.title),
     vendor: clean_(model.vendor),
@@ -1827,6 +1968,16 @@ function productInput_(model) {
     descriptionHtml: clean_(model.descriptionHtml),
     tags: normalizeEditorTags_(model.tags),
   };
+
+  const taxonomyCategoryId =
+    clean_(model.taxonomyCategoryId) ||
+    resolveEditorTaxonomyCategoryId_(model.productType);
+
+  if (taxonomyCategoryId) {
+    input.category = taxonomyCategoryId;
+  }
+
+  return input;
 }
 
 function saveVariant_(productId, variant, isNew) {
@@ -1844,7 +1995,7 @@ function saveVariant_(productId, variant, isNew) {
     inventoryItem: {sku: clean_(variant.sku), tracked: variant.tracked !== false},
   };
   if (variant.compareAtPrice) input.compareAtPrice = clean_(variant.compareAtPrice);
-  if (variant.barcode) input.inventoryItem.barcode = clean_(variant.barcode);
+  input.barcode = clean_(variant.barcode) || null;
   if (variant.optionValues && variant.optionValues.length) input.optionValues = variant.optionValues;
   if (!isNew) input.id = variant.id;
   const key = isNew ? 'productVariantsBulkCreate' : 'productVariantsBulkUpdate';

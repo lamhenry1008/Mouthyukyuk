@@ -1,0 +1,2847 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkout</title>
+  <style>
+    :root {
+      --blue: #1769e0;
+      --blue-dark: #0f55bd;
+      --green: #188038;
+      --red: #c5221f;
+      --amber: #b06000;
+      --ink: #202124;
+      --muted: #667085;
+      --line: #dfe3e8;
+      --soft-line: #edf0f3;
+      --surface: #f7f8fa;
+      --surface-blue: #f3f7ff;
+      --white: #fff;
+      --shadow: 0 12px 32px rgba(31, 42, 55, 0.16);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--white);
+      font: 13px Arial, sans-serif;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 1px solid #bcc3cc;
+      border-radius: 6px;
+      color: var(--ink);
+      background: var(--white);
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) {
+      border-color: #8e99a8;
+      background: #f8f9fa;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    a:focus-visible {
+      outline: 3px solid rgba(23, 105, 224, 0.22);
+      outline-offset: 1px;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    button.primary {
+      border-color: var(--blue);
+      color: var(--white);
+      background: var(--blue);
+    }
+
+    button.primary:hover:not(:disabled) {
+      border-color: var(--blue-dark);
+      background: var(--blue-dark);
+    }
+
+    button.danger {
+      border-color: #e5b6b4;
+      color: var(--red);
+      background: #fffafa;
+    }
+
+    button.text-button {
+      min-height: 28px;
+      padding: 4px 8px;
+      border-color: transparent;
+      color: var(--blue);
+      background: transparent;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-height: 34px;
+      padding: 7px 9px;
+      border: 1px solid #c9ced6;
+      border-radius: 6px;
+      color: var(--ink);
+      background: var(--white);
+    }
+
+    input[readonly] {
+      color: var(--muted);
+      background: #f1f3f5;
+    }
+
+    textarea {
+      min-height: 70px;
+      resize: vertical;
+    }
+
+    .toolbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      min-height: 54px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--white);
+    }
+
+    .brand-title {
+      flex: 0 0 auto;
+      margin-right: 4px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .toolbar-search {
+      display: flex;
+      flex: 1 1 300px;
+      gap: 5px;
+      max-width: 510px;
+    }
+
+    .toolbar-search input {
+      min-width: 130px;
+    }
+
+    .toolbar-spacer {
+      flex: 1 1 auto;
+    }
+
+    .receipt-link {
+      display: none;
+      overflow: hidden;
+      max-width: 130px;
+      color: var(--blue);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .receipt-link.visible {
+      display: inline;
+    }
+
+    .status-message {
+      overflow: hidden;
+      max-width: 230px;
+      color: var(--muted);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .status-message.error-text {
+      color: var(--red);
+    }
+
+    .status-message.success-text {
+      color: var(--green);
+    }
+
+    .app-layout {
+      display: grid;
+      grid-template-columns: 270px minmax(650px, 1fr);
+      height: calc(100vh - 54px);
+    }
+
+    .order-sidebar {
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .sidebar-heading {
+      position: sticky;
+      z-index: 2;
+      top: 0;
+      padding: 11px 12px 8px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .sidebar-empty {
+      padding: 28px 16px;
+      color: var(--muted);
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .order-result {
+      width: 100%;
+      min-height: 0;
+      padding: 10px 12px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      text-align: left;
+      background: var(--white);
+    }
+
+    .order-result:hover:not(:disabled) {
+      border-color: var(--line);
+      background: var(--surface-blue);
+    }
+
+    .order-result.selected {
+      box-shadow: inset 3px 0 var(--blue);
+      background: var(--surface-blue);
+    }
+
+    .order-result-top {
+      display: flex;
+      gap: 6px;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .order-result-id {
+      overflow: hidden;
+      font-weight: 700;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .order-result-customer {
+      margin-top: 5px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .order-result-meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      color: #2457a6;
+      background: #e7efff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .badge.cancelled {
+      color: #7b2830;
+      background: #fce8e6;
+    }
+
+    .editor-pane {
+      overflow: auto;
+      padding: 13px;
+      background: var(--white);
+    }
+
+    .editor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 9px;
+    }
+
+    .editor-header h1 {
+      margin: 0;
+      font-size: 19px;
+    }
+
+    .editor-subtitle {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .panel {
+      margin-bottom: 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--white);
+    }
+
+    .panel-header {
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 42px;
+      padding: 8px 11px;
+      border-bottom: 1px solid var(--soft-line);
+      background: #fbfcfd;
+    }
+
+    .panel-title {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .panel-help {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .panel-body {
+      padding: 10px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .span-2 {
+      grid-column: span 2;
+    }
+
+    .span-4 {
+      grid-column: span 4;
+    }
+
+    .field label {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .required-marker {
+      color: var(--red);
+    }
+
+    .field-error {
+      display: none;
+      margin-top: 3px;
+      color: var(--red);
+      font-size: 11px;
+    }
+
+    .field.invalid input,
+    .field.invalid select,
+    .field.invalid textarea,
+    .invalid-box {
+      border: 2px solid var(--red);
+      background: #fff5f5;
+    }
+
+    .field.invalid .field-error,
+    .images-panel.invalid .field-error,
+    .cart-panel.invalid .field-error {
+      display: block;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      width: 100%;
+    }
+
+    .cart-table,
+    .catalog-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .cart-table th,
+    .cart-table td,
+    .catalog-table th,
+    .catalog-table td {
+      padding: 6px;
+      border-bottom: 1px solid var(--soft-line);
+      vertical-align: middle;
+      text-align: left;
+    }
+
+    .cart-table th,
+    .catalog-table th {
+      color: var(--muted);
+      background: #fbfcfd;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.025em;
+      text-transform: uppercase;
+    }
+
+    .cart-product {
+      width: 29%;
+    }
+
+    .cart-sku {
+      width: 14%;
+    }
+
+    .cart-qty {
+      width: 8%;
+    }
+
+    .cart-money {
+      width: 11%;
+    }
+
+    .cart-discount-type {
+      width: 12%;
+    }
+
+    .cart-total {
+      width: 11%;
+    }
+
+    .cart-remove {
+      width: 42px;
+    }
+
+    .cart-table input,
+    .cart-table select {
+      min-width: 62px;
+      min-height: 30px;
+      padding: 5px 6px;
+    }
+
+    .product-title {
+      display: block;
+      overflow: hidden;
+      font-weight: 700;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .variant-title,
+    .availability {
+      display: block;
+      overflow: hidden;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .availability.low {
+      color: var(--amber);
+    }
+
+    .money-cell {
+      font-variant-numeric: tabular-nums;
+      text-align: right !important;
+    }
+
+    .icon-button {
+      width: 30px;
+      min-height: 30px;
+      padding: 4px;
+      color: var(--red);
+    }
+
+    .empty-cart {
+      padding: 24px 10px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .totals {
+      display: grid;
+      grid-template-columns: auto 110px;
+      gap: 5px 12px;
+      justify-content: end;
+      padding: 10px 11px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .totals-label {
+      color: var(--muted);
+      text-align: right;
+    }
+
+    .totals-value {
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .grand-total {
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .drop-zone {
+      padding: 14px;
+      border: 2px dashed #b8c5d6;
+      border-radius: 8px;
+      color: var(--muted);
+      text-align: center;
+      background: #fbfcff;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .drop-zone.dragover {
+      border-color: var(--blue);
+      background: var(--surface-blue);
+    }
+
+    .drop-zone[aria-disabled="true"] {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .drop-zone input {
+      display: none;
+    }
+
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+      gap: 8px;
+      margin-top: 9px;
+    }
+
+    .image-card {
+      min-width: 0;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--white);
+    }
+
+    .image-card.removed {
+      opacity: 0.48;
+      background: #f5f5f5;
+    }
+
+    .image-preview {
+      position: relative;
+      display: grid;
+      place-items: center;
+      height: 118px;
+      overflow: hidden;
+      border-radius: 5px;
+      color: var(--muted);
+      background: #f1f3f5;
+      font-size: 11px;
+    }
+
+    .image-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .image-name {
+      overflow: hidden;
+      margin: 5px 0;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 11px;
+    }
+
+    .image-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .image-actions button,
+    .image-actions a {
+      flex: 1 1 0;
+      min-height: 28px;
+      padding: 5px 7px;
+      border: 1px solid #c9ced6;
+      border-radius: 5px;
+      color: var(--ink);
+      text-align: center;
+      text-decoration: none;
+      background: var(--white);
+    }
+
+    .image-counter {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .result-box {
+      display: none;
+      margin-bottom: 11px;
+      padding: 10px 12px;
+      border: 1px solid #b8d7bf;
+      border-radius: 7px;
+      color: #174d25;
+      background: #edf7ef;
+      line-height: 1.45;
+    }
+
+    .result-box.visible {
+      display: block;
+    }
+
+    .result-box.error-result {
+      border-color: #e5b6b4;
+      color: #7b2521;
+      background: #fff4f4;
+    }
+
+    .result-box a {
+      color: var(--blue-dark);
+    }
+
+    .audit-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 18px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .busy-overlay {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.64);
+      backdrop-filter: blur(1px);
+    }
+
+    body.busy .busy-overlay {
+      display: grid;
+    }
+
+    .busy-card {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #d8e4f6;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      z-index: 80;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(31, 42, 55, 0.46);
+    }
+
+    .modal-backdrop.open {
+      display: grid;
+    }
+
+    .catalog-modal {
+      display: flex;
+      flex-direction: column;
+      width: min(930px, 96vw);
+      height: min(650px, 90vh);
+      overflow: hidden;
+      border-radius: 10px;
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+
+    .modal-header {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-title {
+      margin-right: 8px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .catalog-search {
+      display: flex;
+      flex: 1 1 auto;
+      gap: 6px;
+    }
+
+    .modal-body {
+      flex: 1 1 auto;
+      overflow: auto;
+    }
+
+    .catalog-product-column {
+      width: 34%;
+    }
+
+    .catalog-variant-column {
+      width: 22%;
+    }
+
+    .catalog-sku-column {
+      width: 19%;
+    }
+
+    .catalog-price-column,
+    .catalog-stock-column {
+      width: 10%;
+    }
+
+    .catalog-add-column {
+      width: 76px;
+    }
+
+    .catalog-message {
+      padding: 36px 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .app-layout {
+        grid-template-columns: 220px minmax(600px, 1fr);
+      }
+
+      .brand-title,
+      .status-message {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand-title">Checkout</div>
+    <button id="new-order-button" type="button">New</button>
+    <div class="toolbar-search">
+      <input
+        id="order-search"
+        type="search"
+        aria-label="Search orders"
+        placeholder="Order ID, customer, phone, or email"
+      >
+      <button id="search-orders-button" type="button">Search</button>
+      <button id="load-order-button" type="button" title="Load this exact order ID">Load ID</button>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <a id="toolbar-receipt-link" class="receipt-link" target="_blank" rel="noopener">Receipt</a>
+    <span id="app-status" class="status-message" role="status" aria-live="polite"></span>
+    <button id="cancel-order-button" class="danger" type="button" disabled>Cancel order</button>
+    <button id="save-order-button" class="primary" type="button">Save receipt</button>
+    <button id="close-button" type="button">Close</button>
+  </header>
+
+  <main class="app-layout">
+    <aside class="order-sidebar" aria-label="Order search results">
+      <div class="sidebar-heading">Order results</div>
+      <div id="order-results">
+        <div class="sidebar-empty">Search for an order to edit, or start a new checkout.</div>
+      </div>
+    </aside>
+
+    <section id="editor-pane" class="editor-pane">
+      <div id="save-result" class="result-box" role="status" aria-live="polite"></div>
+
+      <div class="editor-header">
+        <div>
+          <h1 id="editor-title">New checkout</h1>
+          <div id="editor-subtitle" class="editor-subtitle">The order will be recorded in 訂單紀錄.</div>
+        </div>
+        <span id="order-status-badge" class="badge">Active</span>
+      </div>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Order and customer</div>
+          <div class="panel-help"><span class="required-marker">*</span> Required</div>
+        </div>
+        <div class="panel-body">
+          <div class="form-grid">
+            <div id="field-orderId" class="field">
+              <label for="order-id">Order ID</label>
+              <input id="order-id" readonly placeholder="Created when saved">
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-status" class="field">
+              <label for="order-status">Status</label>
+              <input id="order-status" readonly>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-transactionDate" class="field">
+              <label for="transaction-date">Transaction date <span class="required-marker">*</span></label>
+              <input id="transaction-date" type="datetime-local" required>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-cashier" class="field">
+              <label for="cashier">Cashier <span class="required-marker">*</span></label>
+              <input id="cashier" list="cashier-options" autocomplete="off" required>
+              <datalist id="cashier-options"></datalist>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-customerName" class="field span-2">
+              <label for="customer-name">Customer name <span class="required-marker">*</span></label>
+              <input id="customer-name" autocomplete="name" required>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-customerPhone" class="field">
+              <label for="customer-phone">Phone</label>
+              <input id="customer-phone" type="tel" autocomplete="tel">
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-customerEmail" class="field">
+              <label for="customer-email">Email</label>
+              <input id="customer-email" type="email" autocomplete="email">
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-paymentMethod" class="field span-2">
+              <label for="payment-method">Payment method <span class="required-marker">*</span></label>
+              <select id="payment-method" required></select>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-notes" class="field span-2">
+              <label for="order-notes">Notes</label>
+              <textarea id="order-notes" placeholder="Pickup, delivery, payment, or customer notes"></textarea>
+              <div class="field-error"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="cart-panel" class="panel cart-panel">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">Products and variants</div>
+            <div class="panel-help">
+              Add exact Shopify variants. Adding the same variant again increases its quantity.
+            </div>
+          </div>
+          <button id="add-product-button" type="button">Add product</button>
+        </div>
+        <div class="table-wrap">
+          <table class="cart-table">
+            <thead>
+              <tr>
+                <th class="cart-product">Product / variant</th>
+                <th class="cart-sku">SKU</th>
+                <th class="cart-qty">Qty</th>
+                <th class="cart-money">Unit price</th>
+                <th class="cart-discount-type">Discount</th>
+                <th class="cart-money">Value</th>
+                <th class="cart-total money-cell">Line total</th>
+                <th class="cart-remove"><span class="sr-only">Remove</span></th>
+              </tr>
+            </thead>
+            <tbody id="cart-body"></tbody>
+          </table>
+          <div id="empty-cart" class="empty-cart">No products added yet.</div>
+        </div>
+        <div id="cart-error" class="field-error"></div>
+        <div class="totals" aria-live="polite">
+          <div class="totals-label">Subtotal</div>
+          <div id="order-subtotal" class="totals-value">0.00</div>
+          <div class="totals-label">Discount</div>
+          <div id="order-discount" class="totals-value">0.00</div>
+          <div class="totals-label grand-total">Total</div>
+          <div id="order-total" class="totals-value grand-total">0.00</div>
+        </div>
+      </section>
+
+      <section id="images-panel" class="panel images-panel">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">Receipt photos <span class="required-marker">*</span></div>
+            <div class="panel-help">At least one image is required for an active order. Maximum 10.</div>
+          </div>
+          <div id="image-counter" class="image-counter">0 / 10</div>
+        </div>
+        <div class="panel-body">
+          <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload receipt photos">
+            <input id="receipt-files" type="file" accept="image/*" multiple>
+            <strong>Choose receipt photos</strong> or drop images here<br>
+            <small>Images are resized to a maximum of 1600 px and compressed as JPEG before upload.</small>
+          </div>
+          <div id="images-error" class="field-error"></div>
+          <div id="image-grid" class="image-grid"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-body">
+          <div class="audit-line">
+            <span>Created: <b id="created-at">—</b></span>
+            <span>Updated: <b id="updated-at">—</b></span>
+            <span>Version: <b id="order-version">0</b></span>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="catalog-backdrop" class="modal-backdrop" aria-hidden="true">
+    <section class="catalog-modal" role="dialog" aria-modal="true" aria-labelledby="catalog-title">
+      <div class="modal-header">
+        <div id="catalog-title" class="modal-title">Add Shopify variant</div>
+        <div class="catalog-search">
+          <input
+            id="catalog-search"
+            type="search"
+            aria-label="Search Shopify catalog"
+            placeholder="Search title, handle, or exact SKU"
+          >
+          <button id="catalog-search-button" class="primary" type="button">Search</button>
+        </div>
+        <button id="catalog-close-button" type="button">Close</button>
+      </div>
+      <div class="modal-body">
+        <table class="catalog-table">
+          <thead>
+            <tr>
+              <th class="catalog-product-column">Product</th>
+              <th class="catalog-variant-column">Variant</th>
+              <th class="catalog-sku-column">SKU</th>
+              <th class="catalog-price-column money-cell">Price</th>
+              <th class="catalog-stock-column money-cell">Available</th>
+              <th class="catalog-add-column"></th>
+            </tr>
+          </thead>
+          <tbody id="catalog-results"></tbody>
+        </table>
+        <div id="catalog-message" class="catalog-message">Search Shopify to select an exact variant.</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="busy-overlay" aria-hidden="true">
+    <div class="busy-card">
+      <div class="spinner"></div>
+      <span id="busy-text">Working…</span>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    const MAX_RECEIPT_IMAGES = 10;
+    const MAX_IMAGE_DIMENSION = 1600;
+    const MAX_IMAGE_BYTES = Math.floor(1.5 * 1024 * 1024);
+    const MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
+
+    let bootstrap = {};
+    let order = null;
+    let validationErrors = {};
+    let currentSearchResults = [];
+    let catalogVariants = [];
+    let busyDepth = 0;
+    let cleanOrderFingerprint = '';
+
+    const elements = {};
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function clean(value) {
+      return String(value == null ? '' : value).trim();
+    }
+
+    function numberOr(value, fallback) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function integerOr(value, fallback) {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) ? parsed : fallback;
+    }
+
+    function roundMoney(value) {
+      return Math.round((numberOr(value, 0) + Number.EPSILON) * 100) / 100;
+    }
+
+    function formatMoney(value) {
+      return roundMoney(value).toFixed(2);
+    }
+
+    function isCancelled(status) {
+      const normalized = clean(status).toUpperCase();
+      return normalized === 'CANCELLED' || normalized === 'CANCELED';
+    }
+
+    function safeExternalUrl(value) {
+      const text = clean(value);
+
+      if (!text) {
+        return '';
+      }
+
+      try {
+        const url = new URL(text);
+        return url.protocol === 'https:' || url.protocol === 'http:'
+          ? url.href
+          : '';
+      } catch (error) {
+        return '';
+      }
+    }
+
+    function serverCall(name, ...args) {
+      return new Promise((resolve, reject) => {
+        const runner = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject);
+
+        runner[name](...args);
+      });
+    }
+
+    function errorMessage(error) {
+      if (error && error.message) {
+        return error.message;
+      }
+
+      return clean(error) || 'An unexpected error occurred.';
+    }
+
+    function setBusy(on, message) {
+      busyDepth = Math.max(0, busyDepth + (on ? 1 : -1));
+      document.body.classList.toggle('busy', busyDepth > 0);
+      elements.busyText.textContent = message || 'Working…';
+    }
+
+    function setStatus(message, type) {
+      elements.appStatus.textContent = message || '';
+      elements.appStatus.classList.toggle('error-text', type === 'error');
+      elements.appStatus.classList.toggle('success-text', type === 'success');
+    }
+
+    function showResult(message, options) {
+      const settings = options || {};
+      elements.saveResult.replaceChildren();
+      elements.saveResult.classList.add('visible');
+      elements.saveResult.classList.toggle('error-result', Boolean(settings.error));
+
+      const text = document.createElement('span');
+      text.textContent = message;
+      elements.saveResult.appendChild(text);
+
+      const receiptUrl = safeExternalUrl(settings.receiptUrl);
+
+      if (receiptUrl) {
+        elements.saveResult.appendChild(document.createTextNode(' '));
+        const link = document.createElement('a');
+        link.href = receiptUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'Open receipt';
+        elements.saveResult.appendChild(link);
+      }
+    }
+
+    function hideResult() {
+      elements.saveResult.classList.remove('visible', 'error-result');
+      elements.saveResult.replaceChildren();
+    }
+
+    function localDateTimeValue(value) {
+      const text = clean(value);
+
+      if (
+        text &&
+        (/[zZ]$/.test(text) || /[+-]\d{2}:?\d{2}$/.test(text))
+      ) {
+        const zonedDate = new Date(text);
+
+        if (!Number.isNaN(zonedDate.getTime())) {
+          return formatDateForInput(zonedDate);
+        }
+      }
+
+      if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(text)) {
+        return text.substring(0, 16).replace(' ', 'T');
+      }
+
+      if (text) {
+        const date = new Date(text);
+
+        if (!Number.isNaN(date.getTime())) {
+          return formatDateForInput(date);
+        }
+      }
+
+      return formatDateForInput(new Date());
+    }
+
+    function formatDateForInput(date) {
+      const pad = (value) => String(value).padStart(2, '0');
+      return [
+        date.getFullYear(),
+        '-',
+        pad(date.getMonth() + 1),
+        '-',
+        pad(date.getDate()),
+        'T',
+        pad(date.getHours()),
+        ':',
+        pad(date.getMinutes()),
+      ].join('');
+    }
+
+    function displayDate(value) {
+      const text = clean(value);
+
+      if (!text) {
+        return '—';
+      }
+
+      const date = new Date(text);
+      return Number.isNaN(date.getTime()) ? text : date.toLocaleString();
+    }
+
+    function normalizeItem(item) {
+      const source = item || {};
+      const productTitle = clean(source.productTitle || source.productName || source.title);
+      const variantTitle = clean(source.variantTitle || source.optionTitle || source.variantName);
+
+      return {
+        productId: clean(source.productId),
+        variantId: clean(source.variantId || source.id),
+        inventoryItemId: clean(source.inventoryItemId),
+        sku: clean(source.sku),
+        productTitle,
+        variantTitle,
+        title: clean(source.title || productTitle),
+        quantity: source.quantity == null ? 1 : source.quantity,
+        unitPrice: source.unitPrice == null ? numberOr(source.price, 0) : source.unitPrice,
+        tracked: source.tracked !== false,
+        available: source.available == null
+          ? (source.inventoryQuantity == null ? '' : source.inventoryQuantity)
+          : source.available,
+        discountType: normalizeDiscountType(source.discountType),
+        discountValue: source.discountValue == null ? 0 : source.discountValue,
+      };
+    }
+
+    function normalizeDiscountType(value) {
+      const normalized = clean(value).toUpperCase();
+      return ['AMOUNT', 'PERCENTAGE'].includes(normalized) ? normalized : 'NONE';
+    }
+
+    function revokeNewImageUrls(images) {
+      (images || []).forEach((image) => {
+        if (image && image.isNew && image.previewUrl) {
+          URL.revokeObjectURL(image.previewUrl);
+        }
+      });
+    }
+
+    function normalizeReceiptImage(image) {
+      const source = image || {};
+      const isNew = Boolean(source.isNew || source.base64);
+
+      return {
+        id: clean(source.id || source.fileId),
+        name: clean(source.name || source.fileName || 'Receipt image'),
+        url: clean(source.url || source.webViewLink),
+        thumbnailUrl: clean(source.thumbnailUrl),
+        removed: Boolean(source.removed),
+        isNew,
+        mime: clean(source.mime || source.mimeType || (isNew ? 'image/jpeg' : '')),
+        base64: isNew ? clean(source.base64) : '',
+        byteSize: numberOr(source.byteSize, 0),
+        previewUrl: clean(source.previewUrl),
+      };
+    }
+
+    function normalizeOrder(source) {
+      const data = source || {};
+
+      return {
+        orderId: clean(data.orderId || data.id),
+        status: clean(data.status || bootstrap.defaultStatus || 'ACTIVE').toUpperCase(),
+        version: integerOr(data.version, 0),
+        draftKey: clean(data.draftKey),
+        requestKey: clean(data.requestKey),
+        transactionDate: localDateTimeValue(data.transactionDate),
+        cashier: clean(data.cashier || bootstrap.defaultCashier),
+        customerName: clean(data.customerName),
+        customerPhone: clean(data.customerPhone),
+        customerEmail: clean(data.customerEmail),
+        paymentMethod: clean(data.paymentMethod || bootstrap.defaultPaymentMethod),
+        notes: clean(data.notes),
+        items: Array.isArray(data.items) ? data.items.map(normalizeItem) : [],
+        receiptImages: Array.isArray(data.receiptImages)
+          ? data.receiptImages.map(normalizeReceiptImage)
+          : [],
+        receiptUrl: clean(data.receiptUrl),
+        receiptFileId: clean(data.receiptFileId),
+        createdAt: clean(data.createdAt),
+        updatedAt: clean(data.updatedAt),
+      };
+    }
+
+    function createBlankOrder() {
+      const template = bootstrap.blankOrder || bootstrap.order || {};
+      const blank = normalizeOrder(template);
+      blank.orderId = '';
+      blank.status = clean(bootstrap.defaultStatus || blank.status || 'ACTIVE').toUpperCase();
+      blank.version = 0;
+      blank.transactionDate = formatDateForInput(new Date());
+      blank.customerName = '';
+      blank.customerPhone = '';
+      blank.customerEmail = '';
+      blank.notes = '';
+      blank.items = [];
+      blank.receiptImages = [];
+      blank.receiptUrl = '';
+      blank.receiptFileId = '';
+      blank.createdAt = '';
+      blank.updatedAt = '';
+      return blank;
+    }
+
+    function populateDatalist(element, values) {
+      element.replaceChildren();
+      uniqueStrings(values).forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value;
+        element.appendChild(option);
+      });
+    }
+
+    function uniqueStrings(values) {
+      const seen = new Set();
+
+      return (Array.isArray(values) ? values : [])
+        .map(clean)
+        .filter((value) => {
+          const key = value.toUpperCase();
+
+          if (!value || seen.has(key)) {
+            return false;
+          }
+
+          seen.add(key);
+          return true;
+        });
+    }
+
+    function populatePaymentMethods(selectedValue) {
+      const methods = uniqueStrings([
+        ...(Array.isArray(bootstrap.paymentMethods) && bootstrap.paymentMethods.length
+          ? bootstrap.paymentMethods
+          : [
+            'Cash',
+            'FPS',
+            'PayMe',
+            'Credit Card',
+            'Alipay',
+            'WeChat Pay',
+            'Bank Transfer',
+            'Other',
+          ]),
+        selectedValue,
+      ]);
+
+      elements.paymentMethod.replaceChildren();
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Choose payment method';
+      elements.paymentMethod.appendChild(placeholder);
+
+      methods.forEach((method) => {
+        const option = document.createElement('option');
+        option.value = method;
+        option.textContent = method;
+        elements.paymentMethod.appendChild(option);
+      });
+    }
+
+    function syncFormFromOrder() {
+      populatePaymentMethods(order.paymentMethod);
+      elements.orderId.value = order.orderId;
+      elements.orderStatus.value = order.status;
+      elements.transactionDate.value = localDateTimeValue(order.transactionDate);
+      elements.cashier.value = order.cashier;
+      elements.customerName.value = order.customerName;
+      elements.customerPhone.value = order.customerPhone;
+      elements.customerEmail.value = order.customerEmail;
+      elements.paymentMethod.value = order.paymentMethod;
+      elements.orderNotes.value = order.notes;
+    }
+
+    function syncOrderFromForm() {
+      order.transactionDate = elements.transactionDate.value;
+      order.cashier = clean(elements.cashier.value);
+      order.customerName = clean(elements.customerName.value);
+      order.customerPhone = clean(elements.customerPhone.value);
+      order.customerEmail = clean(elements.customerEmail.value);
+      order.paymentMethod = clean(elements.paymentMethod.value);
+      order.notes = clean(elements.orderNotes.value);
+    }
+
+    function editableOrderFingerprint() {
+      if (!order) {
+        return '';
+      }
+
+      syncOrderFromForm();
+
+      return JSON.stringify({
+        orderId: order.orderId,
+        transactionDate: order.transactionDate,
+        cashier: order.cashier,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        customerEmail: order.customerEmail,
+        paymentMethod: order.paymentMethod,
+        notes: order.notes,
+        items: order.items.map((item) => ({
+          variantId: item.variantId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          discountType: item.discountType,
+          discountValue: item.discountValue,
+        })),
+        receiptImages: order.receiptImages.map((image) => ({
+          id: image.id,
+          name: image.name,
+          removed: Boolean(image.removed),
+          isNew: Boolean(image.isNew),
+          payloadLength: clean(image.base64).length,
+          payloadStart: clean(image.base64).substring(0, 64),
+        })),
+      });
+    }
+
+    function markOrderClean() {
+      cleanOrderFingerprint = editableOrderFingerprint();
+    }
+
+    function hasUnsavedChanges() {
+      return Boolean(order) && editableOrderFingerprint() !== cleanOrderFingerprint;
+    }
+
+    function confirmDiscardChanges(message) {
+      return !hasUnsavedChanges() || window.confirm(message);
+    }
+
+    function renderOrder() {
+      validationErrors = {};
+      clearValidation();
+      hideResult();
+      syncFormFromOrder();
+      renderCart();
+      renderImages();
+      updateOrderHeader();
+      markOrderClean();
+    }
+
+    function updateOrderHeader() {
+      const editMode = Boolean(order.orderId);
+      elements.editorTitle.textContent = editMode ? `Edit ${order.orderId}` : 'New checkout';
+      elements.editorSubtitle.textContent = editMode
+        ? 'Changes update the existing receipt and 訂單紀錄 rows.'
+        : 'The order will be recorded in 訂單紀錄.';
+      elements.orderStatusBadge.textContent = order.status || 'ACTIVE';
+      elements.orderStatusBadge.classList.toggle('cancelled', isCancelled(order.status));
+      const cancelled = isCancelled(order.status);
+      elements.cancelOrderButton.disabled = !editMode || cancelled;
+      elements.createdAt.textContent = displayDate(order.createdAt);
+      elements.updatedAt.textContent = displayDate(order.updatedAt);
+      elements.orderVersion.textContent = String(integerOr(order.version, 0));
+      updateReceiptLink();
+      highlightSelectedOrder();
+      setCancelledReadOnly(cancelled);
+    }
+
+    function setCancelledReadOnly(cancelled) {
+      const formControls = [
+        elements.transactionDate,
+        elements.cashier,
+        elements.customerName,
+        elements.customerPhone,
+        elements.customerEmail,
+        elements.paymentMethod,
+        elements.orderNotes,
+        elements.addProductButton,
+        elements.receiptFiles,
+      ];
+
+      formControls.forEach((control) => {
+        control.disabled = cancelled;
+      });
+
+      elements.saveOrderButton.disabled = cancelled;
+      elements.dropZone.setAttribute('aria-disabled', String(cancelled));
+      elements.dropZone.tabIndex = cancelled ? -1 : 0;
+
+      if (cancelled) {
+        elements.editorPane
+          .querySelectorAll('.cart-table input, .cart-table select, .cart-table button, .image-actions button')
+          .forEach((control) => {
+            control.disabled = true;
+          });
+      }
+    }
+
+    function updateReceiptLink() {
+      const url = safeExternalUrl(order.receiptUrl);
+      elements.toolbarReceiptLink.classList.toggle('visible', Boolean(url));
+
+      if (url) {
+        elements.toolbarReceiptLink.href = url;
+      } else {
+        elements.toolbarReceiptLink.removeAttribute('href');
+      }
+    }
+
+    function highlightSelectedOrder() {
+      document.querySelectorAll('.order-result').forEach((button) => {
+        button.classList.toggle('selected', button.dataset.orderId === order.orderId);
+      });
+    }
+
+    function calculateItem(item) {
+      const quantity = numberOr(item.quantity, 0);
+      const unitPrice = numberOr(item.unitPrice, 0);
+      const subtotal = roundMoney(quantity * unitPrice);
+      const discountValue = numberOr(item.discountValue, 0);
+      let discountAmount = 0;
+
+      if (item.discountType === 'AMOUNT') {
+        discountAmount = Math.min(subtotal, Math.max(0, discountValue));
+      } else if (item.discountType === 'PERCENTAGE') {
+        discountAmount = roundMoney(subtotal * Math.min(100, Math.max(0, discountValue)) / 100);
+      }
+
+      return {
+        subtotal,
+        discountAmount: roundMoney(discountAmount),
+        total: roundMoney(Math.max(0, subtotal - discountAmount)),
+      };
+    }
+
+    function calculateOrderTotals() {
+      return order.items.reduce((totals, item) => {
+        const line = calculateItem(item);
+        totals.subtotal = roundMoney(totals.subtotal + line.subtotal);
+        totals.discount = roundMoney(totals.discount + line.discountAmount);
+        totals.total = roundMoney(totals.total + line.total);
+        return totals;
+      }, {subtotal: 0, discount: 0, total: 0});
+    }
+
+    function renderCart() {
+      elements.cartBody.replaceChildren();
+      elements.emptyCart.hidden = order.items.length > 0;
+
+      order.items.forEach((item, index) => {
+        elements.cartBody.appendChild(buildCartRow(item, index));
+      });
+
+      renderTotals();
+    }
+
+    function buildCartRow(item, index) {
+      const row = document.createElement('tr');
+      row.dataset.index = String(index);
+
+      const productCell = document.createElement('td');
+      const productTitle = document.createElement('span');
+      productTitle.className = 'product-title';
+      productTitle.textContent = item.productTitle || item.title || 'Unnamed product';
+      const variantTitle = document.createElement('span');
+      variantTitle.className = 'variant-title';
+      variantTitle.textContent = item.variantTitle && item.variantTitle !== 'Default Title'
+        ? item.variantTitle
+        : 'Default variant';
+      const availability = document.createElement('span');
+      availability.className = 'availability';
+      const availableNumber = Number(item.available);
+      availability.classList.toggle('low', Number.isFinite(availableNumber) && availableNumber <= 2);
+      availability.textContent = clean(item.available) === ''
+        ? 'Availability unknown'
+        : `Available: ${item.available}`;
+      productCell.append(productTitle, variantTitle, availability);
+
+      const skuCell = document.createElement('td');
+      skuCell.textContent = item.sku || '—';
+
+      const quantityCell = document.createElement('td');
+      const quantityInput = numericInput(item.quantity, '1', '1');
+      quantityInput.setAttribute('aria-label', `Quantity for ${item.productTitle}`);
+      quantityInput.addEventListener('input', () => {
+        item.quantity = quantityInput.value;
+        clearItemError(index);
+        updateLineAndTotals(row, item);
+      });
+      quantityCell.appendChild(quantityInput);
+
+      const priceCell = document.createElement('td');
+      const priceInput = numericInput(item.unitPrice, '0.01', '0');
+      priceInput.setAttribute('aria-label', `Unit price for ${item.productTitle}`);
+      priceInput.addEventListener('input', () => {
+        item.unitPrice = priceInput.value;
+        clearItemError(index);
+        updateLineAndTotals(row, item);
+      });
+      priceCell.appendChild(priceInput);
+
+      const discountTypeCell = document.createElement('td');
+      const discountType = document.createElement('select');
+      discountType.setAttribute('aria-label', `Discount type for ${item.productTitle}`);
+      [
+        ['NONE', 'None'],
+        ['AMOUNT', 'Amount'],
+        ['PERCENTAGE', 'Percent'],
+      ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        discountType.appendChild(option);
+      });
+      discountType.value = normalizeDiscountType(item.discountType);
+      discountType.addEventListener('change', () => {
+        item.discountType = discountType.value;
+        item.discountValue = item.discountType === 'NONE' ? 0 : item.discountValue;
+        discountValue.disabled = item.discountType === 'NONE';
+        discountValue.value = String(item.discountValue || 0);
+        clearItemError(index);
+        updateLineAndTotals(row, item);
+      });
+      discountTypeCell.appendChild(discountType);
+
+      const discountValueCell = document.createElement('td');
+      const discountValue = numericInput(item.discountValue, '0.01', '0');
+      discountValue.disabled = discountType.value === 'NONE';
+      discountValue.setAttribute('aria-label', `Discount value for ${item.productTitle}`);
+      discountValue.addEventListener('input', () => {
+        item.discountValue = discountValue.value;
+        clearItemError(index);
+        updateLineAndTotals(row, item);
+      });
+      discountValueCell.appendChild(discountValue);
+
+      const totalCell = document.createElement('td');
+      totalCell.className = 'money-cell line-total';
+      totalCell.textContent = formatMoney(calculateItem(item).total);
+
+      const removeCell = document.createElement('td');
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'icon-button';
+      removeButton.title = 'Remove line';
+      removeButton.setAttribute('aria-label', `Remove ${item.productTitle}`);
+      removeButton.textContent = '×';
+      removeButton.addEventListener('click', () => {
+        order.items.splice(index, 1);
+        clearFieldError('items');
+        renderCart();
+      });
+      removeCell.appendChild(removeButton);
+
+      row.append(
+        productCell,
+        skuCell,
+        quantityCell,
+        priceCell,
+        discountTypeCell,
+        discountValueCell,
+        totalCell,
+        removeCell
+      );
+
+      if (validationErrors[`items.${index}`]) {
+        row.classList.add('invalid-box');
+        row.title = validationErrors[`items.${index}`];
+      }
+
+      return row;
+    }
+
+    function numericInput(value, step, min) {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = step;
+      input.min = min;
+      input.value = value == null ? '' : String(value);
+      return input;
+    }
+
+    function updateLineAndTotals(row, item) {
+      const totalCell = row.querySelector('.line-total');
+
+      if (totalCell) {
+        totalCell.textContent = formatMoney(calculateItem(item).total);
+      }
+
+      renderTotals();
+    }
+
+    function renderTotals() {
+      const totals = calculateOrderTotals();
+      elements.orderSubtotal.textContent = formatMoney(totals.subtotal);
+      elements.orderDiscount.textContent = formatMoney(totals.discount);
+      elements.orderTotal.textContent = formatMoney(totals.total);
+    }
+
+    function activeReceiptImages() {
+      return order.receiptImages.filter((image) => image.isNew || !image.removed);
+    }
+
+    function renderImages() {
+      elements.imageGrid.replaceChildren();
+      const activeCount = activeReceiptImages().length;
+      elements.imageCounter.textContent = `${activeCount} / ${MAX_RECEIPT_IMAGES}`;
+
+      order.receiptImages.forEach((image, index) => {
+        elements.imageGrid.appendChild(buildImageCard(image, index));
+      });
+    }
+
+    function buildImageCard(image, index) {
+      const card = document.createElement('article');
+      card.className = 'image-card';
+      card.classList.toggle('removed', Boolean(image.removed));
+
+      const preview = document.createElement('div');
+      preview.className = 'image-preview';
+      const previewUrl = image.isNew
+        ? image.previewUrl
+        : safeExternalUrl(image.thumbnailUrl || image.url);
+
+      if (previewUrl) {
+        const img = document.createElement('img');
+        img.src = previewUrl;
+        img.alt = image.name || 'Receipt photo';
+        img.loading = 'lazy';
+        img.addEventListener('error', () => {
+          img.remove();
+          preview.textContent = 'Preview unavailable';
+        });
+        preview.appendChild(img);
+      } else {
+        preview.textContent = 'Preview unavailable';
+      }
+
+      const name = document.createElement('div');
+      name.className = 'image-name';
+      name.title = image.name;
+      name.textContent = image.name || 'Receipt photo';
+
+      const actions = document.createElement('div');
+      actions.className = 'image-actions';
+
+      if (!image.isNew && safeExternalUrl(image.url)) {
+        const open = document.createElement('a');
+        open.href = safeExternalUrl(image.url);
+        open.target = '_blank';
+        open.rel = 'noopener';
+        open.textContent = 'Open';
+        actions.appendChild(open);
+      }
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = image.isNew ? 'Remove' : (image.removed ? 'Undo' : 'Remove');
+      remove.addEventListener('click', () => {
+        if (image.isNew) {
+          if (image.previewUrl) {
+            URL.revokeObjectURL(image.previewUrl);
+          }
+
+          order.receiptImages.splice(index, 1);
+        } else {
+          image.removed = !image.removed;
+        }
+
+        clearFieldError('receiptImages');
+        renderImages();
+      });
+      actions.appendChild(remove);
+      card.append(preview, name, actions);
+      return card;
+    }
+
+    async function handleReceiptFiles(fileList) {
+      if (isCancelled(order.status)) {
+        setStatus('A cancelled order is read-only.', 'error');
+        return;
+      }
+
+      const files = Array.from(fileList || []);
+
+      if (!files.length) {
+        return;
+      }
+
+      const availableSlots = MAX_RECEIPT_IMAGES - activeReceiptImages().length;
+
+      if (availableSlots <= 0) {
+        setStatus(`A maximum of ${MAX_RECEIPT_IMAGES} receipt images is allowed.`, 'error');
+        return;
+      }
+
+      const selected = files.slice(0, availableSlots);
+
+      if (files.length > selected.length) {
+        setStatus(`Only ${selected.length} image(s) were added because the limit is ${MAX_RECEIPT_IMAGES}.`, 'error');
+      }
+
+      setBusy(true, `Preparing ${selected.length} image(s)…`);
+      const preparedImages = [];
+
+      try {
+        for (let index = 0; index < selected.length; index += 1) {
+          const file = selected[index];
+
+          if (!clean(file.type).toLowerCase().startsWith('image/')) {
+            throw new Error(`${file.name} is not an image.`);
+          }
+
+          elements.busyText.textContent = `Compressing ${index + 1} / ${selected.length}…`;
+          const prepared = await resizeReceiptImage(file);
+
+          const existingNewBytes = order.receiptImages
+            .filter((image) => image.isNew && !image.removed)
+            .reduce((total, image) => {
+              return total + receiptImageByteSize(image);
+            }, 0);
+
+          const stagedBytes = preparedImages.reduce((total, image) => {
+            return total + receiptImageByteSize(image);
+          }, 0);
+
+          if (
+            existingNewBytes + stagedBytes + prepared.byteSize >
+            MAX_TOTAL_IMAGE_BYTES
+          ) {
+            URL.revokeObjectURL(prepared.previewUrl);
+            throw new Error(
+              `New receipt images must stay below ` +
+              `${Math.round(MAX_TOTAL_IMAGE_BYTES / 1024 / 1024)} MB together.`
+            );
+          }
+
+          preparedImages.push(prepared);
+        }
+
+        order.receiptImages.push(...preparedImages);
+        clearFieldError('receiptImages');
+        renderImages();
+        setStatus(`${selected.length} receipt image(s) ready to upload.`, 'success');
+      } catch (error) {
+        revokeNewImageUrls(preparedImages);
+        setStatus(errorMessage(error), 'error');
+        showResult(errorMessage(error), {error: true});
+      } finally {
+        elements.receiptFiles.value = '';
+        setBusy(false);
+      }
+    }
+
+    async function resizeReceiptImage(file) {
+      const sourceUrl = await readFileAsDataUrl(file);
+      const image = await loadImage(sourceUrl);
+      const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+      let width = Math.max(1, Math.round(image.naturalWidth * scale));
+      let height = Math.max(1, Math.round(image.naturalHeight * scale));
+      let blob = null;
+
+      for (let sizeAttempt = 0; sizeAttempt < 5; sizeAttempt += 1) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+
+        if (!context) {
+          throw new Error('This browser cannot resize the image.');
+        }
+
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+
+        for (let quality = 0.88; quality >= 0.48; quality -= 0.08) {
+          blob = await canvasToBlob(canvas, 'image/jpeg', quality);
+
+          if (blob.size <= MAX_IMAGE_BYTES) {
+            break;
+          }
+        }
+
+        if (blob && blob.size <= MAX_IMAGE_BYTES) {
+          break;
+        }
+
+        width = Math.max(1, Math.round(width * 0.82));
+        height = Math.max(1, Math.round(height * 0.82));
+      }
+
+      if (!blob) {
+        throw new Error(`Could not process ${file.name}.`);
+      }
+
+      if (blob.size > MAX_IMAGE_BYTES) {
+        throw new Error(
+          `${file.name} could not be compressed below ` +
+          `${(MAX_IMAGE_BYTES / 1024 / 1024).toFixed(1)} MB.`
+        );
+      }
+
+      const base64 = await blobToBase64(blob);
+      return {
+        id: '',
+        name: jpegFileName(file.name),
+        url: '',
+        removed: false,
+        isNew: true,
+        mime: 'image/jpeg',
+        base64,
+        byteSize: blob.size,
+        previewUrl: URL.createObjectURL(blob),
+      };
+    }
+
+    function receiptImageByteSize(image) {
+      if (Number.isFinite(Number(image.byteSize))) {
+        return Number(image.byteSize);
+      }
+
+      const base64 = clean(image.base64).replace(/=+$/, '');
+      return Math.floor(base64.length * 3 / 4);
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function loadImage(url) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('The selected image could not be opened.'));
+        image.src = url;
+      });
+    }
+
+    function canvasToBlob(canvas, mime, quality) {
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Image compression failed.'));
+          }
+        }, mime, quality);
+      });
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const value = clean(reader.result);
+          resolve(value.includes(',') ? value.split(',')[1] : value);
+        };
+        reader.onerror = () => reject(new Error('Could not encode the resized image.'));
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function jpegFileName(name) {
+      const base = clean(name).replace(/\.[^.]+$/, '') || 'receipt';
+      return `${base}.jpg`;
+    }
+
+    function openCatalog() {
+      elements.catalogBackdrop.classList.add('open');
+      elements.catalogBackdrop.setAttribute('aria-hidden', 'false');
+      elements.catalogSearch.focus();
+    }
+
+    function closeCatalog() {
+      elements.catalogBackdrop.classList.remove('open');
+      elements.catalogBackdrop.setAttribute('aria-hidden', 'true');
+      elements.addProductButton.focus();
+    }
+
+    async function searchCatalog() {
+      const query = clean(elements.catalogSearch.value);
+
+      if (!query) {
+        elements.catalogMessage.hidden = false;
+        elements.catalogMessage.textContent = 'Enter a product title, handle, or SKU.';
+        elements.catalogSearch.focus();
+        return;
+      }
+
+      setBusy(true, 'Searching Shopify catalog…');
+
+      try {
+        const result = await serverCall('checkoutSearchCatalog', query);
+        catalogVariants = normalizeCatalogResults(result);
+        renderCatalogResults();
+        setStatus(`${catalogVariants.length} variant(s) found.`);
+      } catch (error) {
+        elements.catalogMessage.hidden = false;
+        elements.catalogMessage.textContent = errorMessage(error);
+        setStatus(errorMessage(error), 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function normalizeCatalogResults(result) {
+      const source = Array.isArray(result)
+        ? result
+        : (Array.isArray(result && result.variants)
+          ? result.variants
+          : (Array.isArray(result && result.products) ? result.products : []));
+
+      const variants = [];
+
+      source.forEach((entry) => {
+        if (Array.isArray(entry.variants)) {
+          entry.variants.forEach((variant) => {
+            variants.push(normalizeCatalogVariant(variant, entry));
+          });
+        } else {
+          variants.push(normalizeCatalogVariant(entry, entry));
+        }
+      });
+
+      return variants.filter((variant) => variant.variantId || variant.productTitle || variant.sku);
+    }
+
+    function normalizeCatalogVariant(variant, product) {
+      const source = variant || {};
+      const parent = product || {};
+
+      return {
+        productId: clean(source.productId || parent.productId || parent.id),
+        variantId: clean(source.variantId || source.id),
+        inventoryItemId: clean(source.inventoryItemId),
+        sku: clean(source.sku),
+        productTitle: clean(source.productTitle || parent.productTitle || parent.title || source.title),
+        variantTitle: clean(source.variantTitle || (source !== parent ? source.title : 'Default Title')),
+        price: numberOr(source.price == null ? source.unitPrice : source.price, 0),
+        tracked: source.tracked !== false,
+        available: source.available == null
+          ? (source.inventoryQuantity == null ? '' : source.inventoryQuantity)
+          : source.available,
+      };
+    }
+
+    function renderCatalogResults() {
+      elements.catalogResults.replaceChildren();
+      elements.catalogMessage.hidden = catalogVariants.length > 0;
+      elements.catalogMessage.textContent = catalogVariants.length
+        ? ''
+        : 'No matching Shopify variants were found.';
+
+      catalogVariants.forEach((variant, index) => {
+        const row = document.createElement('tr');
+        const product = document.createElement('td');
+        product.textContent = variant.productTitle || 'Unnamed product';
+        const variantCell = document.createElement('td');
+        variantCell.textContent = variant.variantTitle || 'Default Title';
+        const sku = document.createElement('td');
+        sku.textContent = variant.sku || '—';
+        const price = document.createElement('td');
+        price.className = 'money-cell';
+        price.textContent = formatMoney(variant.price);
+        const stock = document.createElement('td');
+        stock.className = 'money-cell';
+        stock.textContent = clean(variant.available) === '' ? '—' : String(variant.available);
+        const action = document.createElement('td');
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.textContent = 'Add';
+        add.dataset.index = String(index);
+
+        const missingIdentity =
+          !variant.variantId ||
+          (variant.tracked !== false && !variant.inventoryItemId);
+        add.disabled = missingIdentity;
+        add.title = missingIdentity
+          ? 'This result is missing a Shopify variant or tracked inventory identity.'
+          : 'Add this exact variant';
+        add.addEventListener('click', () => addCatalogVariant(index));
+        action.appendChild(add);
+        row.append(product, variantCell, sku, price, stock, action);
+        elements.catalogResults.appendChild(row);
+      });
+    }
+
+    function addCatalogVariant(index) {
+      const variant = catalogVariants[index];
+
+      if (!variant) {
+        return;
+      }
+
+      const existing = order.items.find((item) => item.variantId === variant.variantId);
+      const nextQuantity = existing
+        ? Math.max(1, integerOr(existing.quantity, 1)) + 1
+        : 1;
+      const available = Number(variant.available);
+
+      if (
+        variant.tracked !== false &&
+        Number.isFinite(available) &&
+        !(existing && order.orderId) &&
+        nextQuantity > available
+      ) {
+        setStatus(
+          `Only ${available} available for ${variant.productTitle}.`,
+          'error'
+        );
+        return;
+      }
+
+      if (existing) {
+        existing.quantity = nextQuantity;
+        setStatus(`Quantity increased for ${variant.productTitle}.`, 'success');
+      } else {
+        order.items.push(normalizeItem({
+          productId: variant.productId,
+          variantId: variant.variantId,
+          inventoryItemId: variant.inventoryItemId,
+          sku: variant.sku,
+          productTitle: variant.productTitle,
+          variantTitle: variant.variantTitle,
+          unitPrice: variant.price,
+          tracked: variant.tracked,
+          available: variant.available,
+          quantity: 1,
+          discountType: 'NONE',
+          discountValue: 0,
+        }));
+        setStatus(`${variant.productTitle} added.`, 'success');
+      }
+
+      clearFieldError('items');
+      renderCart();
+      closeCatalog();
+    }
+
+    function normalizeOrderSummaries(result) {
+      const rows = Array.isArray(result)
+        ? result
+        : (Array.isArray(result && result.orders) ? result.orders : []);
+
+      return rows.map((item) => ({
+        orderId: clean(item.orderId || item.id),
+        status: clean(item.status || 'ACTIVE').toUpperCase(),
+        customerName: clean(item.customerName),
+        transactionDate: clean(item.transactionDate),
+        total: item.total == null ? (item.orderTotal == null ? '' : item.orderTotal) : item.total,
+      })).filter((item) => item.orderId);
+    }
+
+    async function searchOrders() {
+      const query = clean(elements.orderSearch.value);
+
+      if (!query) {
+        setStatus('Enter an order ID, customer, phone, or email.', 'error');
+        elements.orderSearch.focus();
+        return;
+      }
+
+      setBusy(true, 'Searching orders…');
+
+      try {
+        currentSearchResults = normalizeOrderSummaries(await serverCall('findCheckoutOrders', query));
+        renderOrderResults();
+        setStatus(`${currentSearchResults.length} order(s) found.`);
+      } catch (error) {
+        setStatus(errorMessage(error), 'error');
+        showResult(errorMessage(error), {error: true});
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function renderOrderResults() {
+      elements.orderResults.replaceChildren();
+
+      if (!currentSearchResults.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sidebar-empty';
+        empty.textContent = 'No matching orders.';
+        elements.orderResults.appendChild(empty);
+        return;
+      }
+
+      currentSearchResults.forEach((summary) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'order-result';
+        button.dataset.orderId = summary.orderId;
+        button.addEventListener('click', () => loadOrder(summary.orderId));
+
+        const top = document.createElement('div');
+        top.className = 'order-result-top';
+        const id = document.createElement('span');
+        id.className = 'order-result-id';
+        id.textContent = summary.orderId;
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.classList.toggle('cancelled', isCancelled(summary.status));
+        badge.textContent = summary.status;
+        top.append(id, badge);
+
+        const customer = document.createElement('div');
+        customer.className = 'order-result-customer';
+        customer.textContent = summary.customerName || 'Unnamed customer';
+
+        const meta = document.createElement('div');
+        meta.className = 'order-result-meta';
+        const date = document.createElement('span');
+        date.textContent = displayDate(summary.transactionDate);
+        const total = document.createElement('span');
+        total.textContent = clean(summary.total) === '' ? '' : formatMoney(summary.total);
+        meta.append(date, total);
+        button.append(top, customer, meta);
+        elements.orderResults.appendChild(button);
+      });
+
+      highlightSelectedOrder();
+    }
+
+    async function loadExactOrder() {
+      const orderId = clean(elements.orderSearch.value);
+
+      if (!orderId) {
+        setStatus('Enter the exact order ID first.', 'error');
+        elements.orderSearch.focus();
+        return;
+      }
+
+      await loadOrder(orderId);
+    }
+
+    async function loadOrder(orderId) {
+      if (!confirmDiscardChanges('Discard unsaved changes and load another order?')) {
+        return;
+      }
+
+      setBusy(true, `Loading ${orderId}…`);
+
+      try {
+        const result = await serverCall('loadCheckoutOrder', orderId);
+        const loaded = result && result.order ? result.order : result;
+
+        if (!loaded) {
+          throw new Error(`Order ${orderId} was not found.`);
+        }
+
+        revokeNewImageUrls(order && order.receiptImages);
+        order = normalizeOrder(loaded);
+        renderOrder();
+        setStatus(`${order.orderId} loaded.`, 'success');
+      } catch (error) {
+        setStatus(errorMessage(error), 'error');
+        showResult(errorMessage(error), {error: true});
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function startNewOrder() {
+      if (!confirmDiscardChanges('Discard unsaved changes and start a new checkout?')) {
+        return;
+      }
+
+      setBusy(true, 'Preparing a new checkout…');
+
+      try {
+        const blankOrder = await serverCall('getBlankCheckoutOrder');
+        revokeNewImageUrls(order && order.receiptImages);
+        order = normalizeOrder(blankOrder || {});
+        elements.orderSearch.value = '';
+        renderOrder();
+        setStatus('New checkout ready.');
+      } catch (error) {
+        const message = errorMessage(error);
+        setStatus(message, 'error');
+        showResult(message, {error: true});
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function closeCheckout() {
+      if (!confirmDiscardChanges('Close Checkout and discard unsaved changes?')) {
+        return;
+      }
+
+      markOrderClean();
+      revokeNewImageUrls(order && order.receiptImages);
+      google.script.host.close();
+    }
+
+    function validateOrder() {
+      syncOrderFromForm();
+      const errors = {};
+
+      if (!order.transactionDate) {
+        errors.transactionDate = 'Transaction date is required.';
+      }
+
+      if (!order.cashier) {
+        errors.cashier = 'Cashier is required.';
+      }
+
+      if (!order.customerName) {
+        errors.customerName = 'Customer name is required.';
+      }
+
+      if (order.customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.customerEmail)) {
+        errors.customerEmail = 'Enter a valid email address.';
+      }
+
+      if (!order.paymentMethod) {
+        errors.paymentMethod = 'Payment method is required.';
+      }
+
+      if (!order.items.length) {
+        errors.items = 'Add at least one Shopify variant.';
+      }
+
+      order.items.forEach((item, index) => {
+        const problems = [];
+        const quantity = Number(item.quantity);
+        const unitPrice = Number(item.unitPrice);
+        const discountValue = Number(item.discountValue || 0);
+        const lineSubtotal = Number.isFinite(quantity) && Number.isFinite(unitPrice)
+          ? quantity * unitPrice
+          : 0;
+
+        if (!item.variantId) {
+          problems.push('missing Shopify variant identity');
+        }
+
+        if (item.tracked !== false && !item.inventoryItemId) {
+          problems.push('missing tracked inventory identity');
+        }
+
+        if (!Number.isInteger(quantity) || quantity <= 0) {
+          problems.push('quantity must be a positive whole number');
+        }
+
+        const available = Number(item.available);
+
+        if (
+          item.tracked !== false &&
+          clean(item.available) !== '' &&
+          Number.isFinite(available) &&
+          quantity > available
+        ) {
+          problems.push(`only ${available} available in Shopify`);
+        }
+
+        if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+          problems.push('unit price must be zero or more');
+        }
+
+        if (!Number.isFinite(discountValue) || discountValue < 0) {
+          problems.push('discount must be zero or more');
+        } else if (item.discountType === 'PERCENTAGE' && discountValue > 100) {
+          problems.push('percentage discount cannot exceed 100');
+        } else if (item.discountType === 'AMOUNT' && discountValue > lineSubtotal) {
+          problems.push('amount discount cannot exceed the line subtotal');
+        }
+
+        if (problems.length) {
+          errors[`items.${index}`] = problems.join('; ');
+        }
+      });
+
+      if (!isCancelled(order.status) && activeReceiptImages().length === 0) {
+        errors.receiptImages = 'Upload at least one receipt photo.';
+      }
+
+      validationErrors = errors;
+      showValidation(errors);
+      return Object.keys(errors).length === 0;
+    }
+
+    function showValidation(errors) {
+      clearValidation();
+
+      Object.entries(errors).forEach(([key, message]) => {
+        if (key.startsWith('items.')) {
+          return;
+        }
+
+        const mappedKey = key === 'items' ? 'items' : key;
+        markFieldInvalid(mappedKey, message);
+      });
+
+      renderCart();
+
+      const firstKey = Object.keys(errors)[0];
+
+      if (firstKey) {
+        const target = firstKey.startsWith('items.') || firstKey === 'items'
+          ? elements.cartPanel
+          : (firstKey === 'receiptImages'
+            ? elements.imagesPanel
+            : $(`field-${firstKey}`));
+
+        if (target) {
+          target.scrollIntoView({behavior: 'smooth', block: 'center'});
+          const focusable = target.querySelector('input, select, textarea, button');
+
+          if (focusable) {
+            focusable.focus({preventScroll: true});
+          }
+        }
+      }
+    }
+
+    function markFieldInvalid(key, message) {
+      if (key === 'items') {
+        elements.cartPanel.classList.add('invalid');
+        elements.cartError.textContent = message;
+        return;
+      }
+
+      if (key === 'receiptImages') {
+        elements.imagesPanel.classList.add('invalid');
+        elements.imagesError.textContent = message;
+        return;
+      }
+
+      const field = $(`field-${key}`);
+
+      if (!field) {
+        return;
+      }
+
+      field.classList.add('invalid');
+      const input = field.querySelector('input, select, textarea');
+      const error = field.querySelector('.field-error');
+
+      if (input) {
+        input.setAttribute('aria-invalid', 'true');
+      }
+
+      if (error) {
+        error.textContent = message;
+      }
+    }
+
+    function clearValidation() {
+      document.querySelectorAll('.field.invalid').forEach((field) => field.classList.remove('invalid'));
+      document.querySelectorAll('[aria-invalid="true"]').forEach((input) => input.removeAttribute('aria-invalid'));
+      document.querySelectorAll('.field-error').forEach((error) => {
+        error.textContent = '';
+      });
+      elements.cartPanel.classList.remove('invalid');
+      elements.imagesPanel.classList.remove('invalid');
+    }
+
+    function clearFieldError(key) {
+      delete validationErrors[key];
+
+      if (key === 'items') {
+        elements.cartPanel.classList.remove('invalid');
+        elements.cartError.textContent = '';
+      } else if (key === 'receiptImages') {
+        elements.imagesPanel.classList.remove('invalid');
+        elements.imagesError.textContent = '';
+      } else {
+        const field = $(`field-${key}`);
+
+        if (field) {
+          field.classList.remove('invalid');
+          const input = field.querySelector('input, select, textarea');
+
+          if (input) {
+            input.removeAttribute('aria-invalid');
+          }
+        }
+      }
+    }
+
+    function clearItemError(index) {
+      delete validationErrors[`items.${index}`];
+      const row = elements.cartBody.querySelector(`tr[data-index="${index}"]`);
+
+      if (row) {
+        row.classList.remove('invalid-box');
+        row.removeAttribute('title');
+      }
+    }
+
+    function buildSavePayload() {
+      syncOrderFromForm();
+      const totals = calculateOrderTotals();
+
+      return {
+        orderId: order.orderId,
+        status: order.status,
+        version: integerOr(order.version, 0),
+        draftKey: order.draftKey,
+        requestKey: order.requestKey,
+        transactionDate: order.transactionDate,
+        cashier: order.cashier,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        customerEmail: order.customerEmail,
+        paymentMethod: order.paymentMethod,
+        notes: order.notes,
+        items: order.items.map((item) => {
+          const line = calculateItem(item);
+
+          return {
+            productId: item.productId,
+            variantId: item.variantId,
+            inventoryItemId: item.inventoryItemId,
+            sku: item.sku,
+            productTitle: item.productTitle,
+            variantTitle: item.variantTitle,
+            title: item.title || item.productTitle,
+            tracked: item.tracked !== false,
+            available: item.available,
+            quantity: Number(item.quantity),
+            unitPrice: roundMoney(item.unitPrice),
+            discountType: normalizeDiscountType(item.discountType).toLowerCase(),
+            discountValue: roundMoney(item.discountValue),
+            lineSubtotal: line.subtotal,
+            discountAmount: line.discountAmount,
+            lineTotal: line.total,
+          };
+        }),
+        receiptImages: order.receiptImages.map((image) => {
+          if (image.isNew) {
+            return {
+              name: image.name,
+              mime: image.mime || 'image/jpeg',
+              base64: image.base64,
+            };
+          }
+
+          return {
+            id: image.id,
+            name: image.name,
+            url: image.url,
+            thumbnailUrl: image.thumbnailUrl,
+            removed: Boolean(image.removed),
+          };
+        }),
+        receiptUrl: order.receiptUrl,
+        receiptFileId: order.receiptFileId,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        subtotal: totals.subtotal,
+        discountTotal: totals.discount,
+        total: totals.total,
+      };
+    }
+
+    async function saveOrder() {
+      if (isCancelled(order.status)) {
+        setStatus('A cancelled order cannot be edited.', 'error');
+        return;
+      }
+
+      if (!validateOrder()) {
+        setStatus('Complete the highlighted fields.', 'error');
+        showResult('The order was not saved. Complete the highlighted fields.', {error: true});
+        return;
+      }
+
+      setBusy(true, order.orderId ? 'Updating receipt…' : 'Creating receipt…');
+      hideResult();
+
+      try {
+        const result = await serverCall('saveCheckoutOrder', buildSavePayload());
+
+        if (!result || result.ok === false) {
+          if (result && result.retryRequestKey) {
+            order.requestKey = clean(result.retryRequestKey);
+          }
+
+          throw new Error((result && result.message) || 'The order could not be saved.');
+        }
+
+        const savedOrder = result.order || result;
+        revokeNewImageUrls(order.receiptImages);
+        order = normalizeOrder(savedOrder);
+        renderOrder();
+
+        const warnings = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
+        const message = warnings.length
+          ? `${order.orderId} saved. Warning: ${warnings.join(' | ')}`
+          : `${order.orderId} saved successfully.`;
+        showResult(message, {receiptUrl: order.receiptUrl});
+        setStatus(message, warnings.length ? 'error' : 'success');
+        refreshCurrentSearchSummary();
+      } catch (error) {
+        const message = errorMessage(error);
+        setStatus(message, 'error');
+        showResult(message, {error: true});
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function refreshCurrentSearchSummary() {
+      const index = currentSearchResults.findIndex((item) => item.orderId === order.orderId);
+      const totals = calculateOrderTotals();
+      const summary = {
+        orderId: order.orderId,
+        status: order.status,
+        customerName: order.customerName,
+        transactionDate: order.transactionDate,
+        total: totals.total,
+      };
+
+      if (index >= 0) {
+        currentSearchResults[index] = summary;
+      } else if (order.orderId) {
+        currentSearchResults.unshift(summary);
+      }
+
+      renderOrderResults();
+    }
+
+    async function cancelOrder() {
+      if (!order.orderId || isCancelled(order.status)) {
+        return;
+      }
+
+      if (
+        hasUnsavedChanges() &&
+        !window.confirm(
+          'Unsaved edits are not part of the saved order. Discard them and continue with cancellation?'
+        )
+      ) {
+        return;
+      }
+
+      const reason = clean(window.prompt(`Why are you cancelling ${order.orderId}?`));
+
+      if (!reason) {
+        setStatus('Cancellation stopped. A reason is required.', 'error');
+        return;
+      }
+
+      if (!window.confirm(`Cancel ${order.orderId}? This will mark the order as cancelled.`)) {
+        return;
+      }
+
+      setBusy(true, `Cancelling ${order.orderId}…`);
+
+      try {
+        const result = await serverCall(
+          'cancelCheckoutOrder',
+          order.orderId,
+          reason,
+          integerOr(order.version, 0),
+          order.requestKey
+        );
+
+        if (!result || result.ok === false) {
+          if (result && result.retryRequestKey) {
+            order.requestKey = clean(result.retryRequestKey);
+          }
+
+          throw new Error((result && result.message) || 'The order could not be cancelled.');
+        }
+
+        const cancelled = result.order || result;
+        revokeNewImageUrls(order.receiptImages);
+        order = normalizeOrder(cancelled);
+        renderOrder();
+        const warnings = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
+        const message = warnings.length
+          ? `${order.orderId} cancelled. Warning: ${warnings.join(' | ')}`
+          : `${order.orderId} cancelled.`;
+        showResult(message, {receiptUrl: order.receiptUrl});
+        setStatus(message, warnings.length ? 'error' : 'success');
+        refreshCurrentSearchSummary();
+      } catch (error) {
+        const message = errorMessage(error);
+        setStatus(message, 'error');
+        showResult(message, {error: true});
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function bindFormField(element, key, eventName) {
+      element.addEventListener(eventName || 'input', () => {
+        order[key] = element.value;
+        clearFieldError(key);
+      });
+    }
+
+    function cacheElements() {
+      elements.newOrderButton = $('new-order-button');
+      elements.orderSearch = $('order-search');
+      elements.searchOrdersButton = $('search-orders-button');
+      elements.loadOrderButton = $('load-order-button');
+      elements.toolbarReceiptLink = $('toolbar-receipt-link');
+      elements.appStatus = $('app-status');
+      elements.cancelOrderButton = $('cancel-order-button');
+      elements.saveOrderButton = $('save-order-button');
+      elements.closeButton = $('close-button');
+      elements.orderResults = $('order-results');
+      elements.saveResult = $('save-result');
+      elements.editorPane = $('editor-pane');
+      elements.editorTitle = $('editor-title');
+      elements.editorSubtitle = $('editor-subtitle');
+      elements.orderStatusBadge = $('order-status-badge');
+      elements.orderId = $('order-id');
+      elements.orderStatus = $('order-status');
+      elements.transactionDate = $('transaction-date');
+      elements.cashier = $('cashier');
+      elements.cashierOptions = $('cashier-options');
+      elements.customerName = $('customer-name');
+      elements.customerPhone = $('customer-phone');
+      elements.customerEmail = $('customer-email');
+      elements.paymentMethod = $('payment-method');
+      elements.orderNotes = $('order-notes');
+      elements.addProductButton = $('add-product-button');
+      elements.cartPanel = $('cart-panel');
+      elements.cartBody = $('cart-body');
+      elements.emptyCart = $('empty-cart');
+      elements.cartError = $('cart-error');
+      elements.orderSubtotal = $('order-subtotal');
+      elements.orderDiscount = $('order-discount');
+      elements.orderTotal = $('order-total');
+      elements.imagesPanel = $('images-panel');
+      elements.dropZone = $('drop-zone');
+      elements.receiptFiles = $('receipt-files');
+      elements.imagesError = $('images-error');
+      elements.imageCounter = $('image-counter');
+      elements.imageGrid = $('image-grid');
+      elements.createdAt = $('created-at');
+      elements.updatedAt = $('updated-at');
+      elements.orderVersion = $('order-version');
+      elements.catalogBackdrop = $('catalog-backdrop');
+      elements.catalogSearch = $('catalog-search');
+      elements.catalogSearchButton = $('catalog-search-button');
+      elements.catalogCloseButton = $('catalog-close-button');
+      elements.catalogResults = $('catalog-results');
+      elements.catalogMessage = $('catalog-message');
+      elements.busyText = $('busy-text');
+    }
+
+    function bindEvents() {
+      elements.newOrderButton.addEventListener('click', startNewOrder);
+      elements.searchOrdersButton.addEventListener('click', searchOrders);
+      elements.loadOrderButton.addEventListener('click', loadExactOrder);
+      elements.saveOrderButton.addEventListener('click', saveOrder);
+      elements.cancelOrderButton.addEventListener('click', cancelOrder);
+      elements.closeButton.addEventListener('click', closeCheckout);
+      elements.addProductButton.addEventListener('click', openCatalog);
+      elements.catalogSearchButton.addEventListener('click', searchCatalog);
+      elements.catalogCloseButton.addEventListener('click', closeCatalog);
+
+      elements.orderSearch.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          searchOrders();
+        }
+      });
+
+      elements.catalogSearch.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          searchCatalog();
+        }
+      });
+
+      elements.catalogBackdrop.addEventListener('click', (event) => {
+        if (event.target === elements.catalogBackdrop) {
+          closeCatalog();
+        }
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && elements.catalogBackdrop.classList.contains('open')) {
+          closeCatalog();
+        }
+      });
+
+      bindFormField(elements.transactionDate, 'transactionDate', 'change');
+      bindFormField(elements.cashier, 'cashier');
+      bindFormField(elements.customerName, 'customerName');
+      bindFormField(elements.customerPhone, 'customerPhone');
+      bindFormField(elements.customerEmail, 'customerEmail');
+      bindFormField(elements.paymentMethod, 'paymentMethod', 'change');
+      bindFormField(elements.orderNotes, 'notes');
+
+      elements.receiptFiles.addEventListener('change', () => {
+        handleReceiptFiles(elements.receiptFiles.files);
+      });
+
+      elements.dropZone.addEventListener('click', () => elements.receiptFiles.click());
+      elements.dropZone.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          elements.receiptFiles.click();
+        }
+      });
+
+      ['dragenter', 'dragover'].forEach((eventName) => {
+        elements.dropZone.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          elements.dropZone.classList.add('dragover');
+        });
+      });
+
+      ['dragleave', 'drop'].forEach((eventName) => {
+        elements.dropZone.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          elements.dropZone.classList.remove('dragover');
+        });
+      });
+
+      elements.dropZone.addEventListener('drop', (event) => {
+        handleReceiptFiles(event.dataTransfer.files);
+      });
+
+      window.addEventListener('beforeunload', (event) => {
+        if (hasUnsavedChanges()) {
+          event.preventDefault();
+          event.returnValue = '';
+          return;
+        }
+
+        revokeNewImageUrls(order && order.receiptImages);
+      });
+    }
+
+    async function initialize() {
+      cacheElements();
+      bindEvents();
+      setBusy(true, 'Preparing checkout…');
+
+      try {
+        bootstrap = (await serverCall('getCheckoutBootstrap')) || {};
+        populateDatalist(elements.cashierOptions, bootstrap.cashiers || []);
+        currentSearchResults = normalizeOrderSummaries(
+          bootstrap.recentOrders || []
+        );
+        order = createBlankOrder();
+        renderOrder();
+        renderOrderResults();
+        setStatus('Checkout ready.');
+      } catch (error) {
+        order = normalizeOrder({});
+        renderOrder();
+        const message = errorMessage(error);
+        setStatus(message, 'error');
+        showResult(message, {error: true});
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    initialize();
+  </script>
+</body>
+</html>
