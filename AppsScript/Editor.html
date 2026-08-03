@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html>
 <head>
@@ -301,6 +302,15 @@
       padding: 5px;
     }
 
+    .image-removal-notice {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid #f1c36d;
+      border-radius: 5px;
+      color: #714b00;
+      background: #fff8e8;
+    }
+
     .busy {
       pointer-events: none;
       opacity: 0.55;
@@ -372,12 +382,34 @@
     }
 
     async function openCheckout() {
+      // Open a blank tab while this function still runs directly from the
+      // user's click. Browsers commonly block window.open after an async
+      // google.script.run response.
+      const checkoutWindow = window.open(
+        'about:blank',
+        '_blank'
+      );
+
       setBusy(true, 'Opening checkout…');
 
       try {
+        const appUrl = await call('getCheckoutAppUrl');
+
+        if (checkoutWindow) {
+          checkoutWindow.location.replace(appUrl);
+          google.script.host.close();
+          return;
+        }
+
+        // Popup blocking can still occur under strict browser settings. The
+        // persistent launcher gives the user a normal clickable link.
         await call('showCheckoutDialog');
-        google.script.host.close();
+        setBusy(false, 'Use the Open Checkout link.');
       } catch (error) {
+        if (checkoutWindow && !checkoutWindow.closed) {
+          checkoutWindow.close();
+        }
+
         alert(error.message || error);
         setBusy(false);
       }
@@ -846,6 +878,17 @@
           }
         </div>
 
+        ${
+          (model.removedShopifyMediaIds || []).length
+            ? `
+              <div class="image-removal-notice">
+                ${model.removedShopifyMediaIds.length} Shopify image(s)
+                will be permanently deleted when you save.
+              </div>
+            `
+            : ''
+        }
+
         <h3>Sheet links</h3>
         <div>
           ${
@@ -1004,7 +1047,15 @@
                   Remove Drive file
                 </button>
               `
-              : '<small>Shopify media</small>'
+              : `
+                <small>Shopify media</small>
+                <button
+                  class="danger"
+                  onclick="removeShopifyImage('${esc(image.id)}')"
+                >
+                  Remove from Shopify
+                </button>
+              `
           }
         </div>
       `;
@@ -1267,6 +1318,30 @@
       } finally {
         setBusy(false);
       }
+    }
+
+    function removeShopifyImage(id) {
+      if (
+        !model ||
+        !confirm(
+          'Permanently delete this image from Shopify when you save? ' +
+          'This cannot be undone.'
+        )
+      ) {
+        return;
+      }
+
+      model.removedShopifyMediaIds = Array.from(new Set([
+        ...(model.removedShopifyMediaIds || []),
+        id,
+      ]));
+
+      model.images = (model.images || []).filter((image) => {
+        return image.id !== id;
+      });
+
+      delete errors.images;
+      render();
     }
 
     async function save() {

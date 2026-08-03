@@ -11,7 +11,7 @@
  *   7. Upload approved rows to Shopify.
  *
  * New SKU:
- *   Creates a DRAFT Shopify product.
+ *   Creates an ACTIVE Shopify product after explicit review approval.
  *
  * One exact existing SKU:
  *   Updates the corresponding Shopify product and variant.
@@ -44,7 +44,7 @@ const MYK_SHOPIFY = Object.freeze({
   apiVersion: '2026-07',
 
   reviewSheetName: 'Shopify Direct Sync Review',
-  defaultProductStatus: 'DRAFT',
+  syncProductStatus: 'ACTIVE',
 
   // Set false while testing product fields without changing stock.
   inventoryWriteEnabled: true,
@@ -77,6 +77,7 @@ const MYK_SHOPIFY = Object.freeze({
     'Chinese Name',
     'Brand',
     'Product Type',
+    'Status',
     'Shopify Taxonomy ID',
     'SKU',
     'Price',
@@ -96,9 +97,21 @@ const MYK_SHOPIFY = Object.freeze({
 });
 
 const MYK_TAXONOMY = Object.freeze({
-  releaseUrl:
+  /*
+   * The live Shopify Admin taxonomy is authoritative. These official GitHub
+   * endpoints are used only when the live taxonomy query is unavailable.
+   * Discovering GitHub's latest release avoids pinning a stale fallback.
+   */
+  latestReleaseApiUrl:
+    'https://api.github.com/repos/Shopify/product-taxonomy/releases/latest',
+
+  publishedReleaseUrlTemplate:
     'https://raw.githubusercontent.com/Shopify/product-taxonomy/' +
-    'v2026-05/dist/en/categories.txt',
+    'v{VERSION}/dist/en/categories.txt',
+
+  mainDistributionUrl:
+    'https://raw.githubusercontent.com/Shopify/product-taxonomy/' +
+    'main/dist/en/categories.txt',
 
   cacheSeconds: 21600,
 
@@ -628,7 +641,8 @@ function verifyProductMetafields_(accessToken, productId) {
 /**
  * Builds the review sheet from the currently active source sheet.
  *
- * This function does not contact Shopify.
+ * The build performs read-only taxonomy lookups against Shopify so the review
+ * and source sheet contain the current category GID before approval.
  */
 function buildReviewFromActiveSheet() {
   const spreadsheet = SpreadsheetApp.getActive();
@@ -641,6 +655,13 @@ function buildReviewFromActiveSheet() {
   }
 
   const profile = requireSheetProfile_(sourceSheetName);
+  const taxonomyColumnIndex = ensureSourceTaxonomyColumn_(
+      sourceSheet,
+      profile);
+  // Keep permanent Shopify identities on the source sheet. Existing values
+  // are copied into the review; missing values are filled by preflight or by
+  // a successful create/upload later in the workflow.
+  ensureSourceShopifyIdentityColumns_(sourceSheet);
   const sourceValues = sourceSheet.getDataRange().getDisplayValues();
 
   if (sourceValues.length < 2) {
@@ -650,6 +671,9 @@ function buildReviewFromActiveSheet() {
 
   const sourceIndices = getColumnIndices(sourceSheet);
   const reviewRows = [];
+  const taxonomyColumnValues = sourceValues
+      .slice(1)
+      .map((row) => [clean_(row[taxonomyColumnIndex])]);
 
   for (let offset = 1; offset < sourceValues.length; offset += 1) {
     const sourceRowValues = sourceValues[offset];
@@ -668,6 +692,23 @@ function buildReviewFromActiveSheet() {
         profile);
 
     const validation = validateNormalizedProduct_(product);
+    const sourceProductGid = getAliasedValue_(
+        sourceRowValues,
+        sourceIndices,
+        ['Shopify Product GID']);
+    const sourceVariantGid = getAliasedValue_(
+        sourceRowValues,
+        sourceIndices,
+        ['Shopify Variant GID']);
+    const sourceInventoryItemGid = getAliasedValue_(
+        sourceRowValues,
+        sourceIndices,
+        ['Shopify Inventory Item GID']);
+
+    if (product.taxonomyCategoryId) {
+      taxonomyColumnValues[offset - 1][0] =
+        product.taxonomyCategoryId;
+    }
 
     reviewRows.push([
       false,
@@ -683,6 +724,7 @@ function buildReviewFromActiveSheet() {
       product.chineseName,
       product.brand,
       product.productType,
+      'PENDING',
       product.taxonomyCategoryId,
       product.sku,
       product.price,
@@ -693,19 +735,31 @@ function buildReviewFromActiveSheet() {
       product.tags.join(', '),
       product.bodyHtml,
       product.imageUrl,
-      '',
-      '',
-      '',
+      sourceProductGid,
+      sourceVariantGid,
+      sourceInventoryItemGid,
       'NOT_UPLOADED',
       '',
     ]);
+  }
+
+  if (taxonomyColumnValues.length > 0) {
+    sourceSheet
+        .getRange(
+            2,
+            taxonomyColumnIndex + 1,
+            taxonomyColumnValues.length,
+            1)
+        .setValues(taxonomyColumnValues);
   }
 
   writeReviewSheet_(spreadsheet, reviewRows);
 
   SpreadsheetApp.getUi().alert(
       `Built ${reviewRows.length} review row(s) from “${sourceSheetName}”.\n\n` +
-      'No Shopify request was made. Run the Shopify preflight next.');
+      'Shopify GID columns and latest taxonomy IDs are now present in the ' +
+      'source sheet. Existing GIDs were copied into the review. Run the ' +
+      'Shopify check next to fill missing GIDs for existing products.');
 }
 
 /**
@@ -818,8 +872,17 @@ function buildNormalizedProduct_(
         profile.aliases.productType) ||
     itemType;
 
+  const existingTaxonomyCategoryId =
+    normalizeTaxonomyCategoryId_(
+        getAliasedValue_(
+            row,
+            sourceIndices,
+            profile.aliases.taxonomyCategoryId));
+
   const taxonomyCategoryId =
-    resolveTaxonomyCategoryForProductType_(productType);
+    resolveTaxonomyCategoryForProductType_(
+        productType,
+        existingTaxonomyCategoryId);
 
   return {
     sourceSheetName,
@@ -857,17 +920,22 @@ function buildNormalizedProduct_(
 }
 
 /**
- * Resolves one Shopify taxonomy category from Product Type.
+ * Resolves one current Shopify taxonomy category from Product Type.
  *
- * It uses an exact leaf-name match first. It only accepts a partial match when
- * exactly one category matches, preventing a broad or ambiguous category from
- * being selected silently.
+ * The live Admin API taxonomy for MYK_SHOPIFY.apiVersion is authoritative.
+ * Shopify's latest published taxonomy distribution is a read-only fallback.
+ * A pre-existing source-sheet category is retained only if both automatic
+ * lookups cannot safely select one category.
  */
-function resolveTaxonomyCategoryForProductType_(productType) {
+function resolveTaxonomyCategoryForProductType_(
+    productType,
+    fallbackCategoryId) {
   const normalizedType = normalizeProductTypeKey_(productType);
+  const normalizedFallback = normalizeTaxonomyCategoryId_(
+      fallbackCategoryId);
 
   if (!normalizedType) {
-    return '';
+    return normalizedFallback;
   }
 
   const searchTerm =
@@ -875,76 +943,187 @@ function resolveTaxonomyCategoryForProductType_(productType) {
     clean_(productType);
 
   if (!searchTerm) {
-    return '';
+    return normalizedFallback;
   }
 
-  const categories = getShopifyTaxonomy2026May_();
-  const normalizedSearch = normalizeTaxonomyText_(searchTerm);
+  const cache = CacheService.getScriptCache();
+  const cacheKey = taxonomyCategoryCacheKey_(normalizedType);
+  const cached = cache.get(cacheKey);
 
-  const exactLeafMatches = categories.filter((category) => {
-    return (
-      normalizeTaxonomyText_(category.leafName) === normalizedSearch
-    );
-  });
-
-  if (exactLeafMatches.length === 1) {
-    return exactLeafMatches[0].gid;
+  if (cached) {
+    const cachedValue = JSON.parse(cached);
+    return cachedValue.gid || normalizedFallback;
   }
 
-  const exactBreadcrumbMatches = categories.filter((category) => {
-    return (
-      normalizeTaxonomyText_(category.breadcrumb) === normalizedSearch
-    );
-  });
+  let selected = null;
 
-  if (exactBreadcrumbMatches.length === 1) {
-    return exactBreadcrumbMatches[0].gid;
+  try {
+    selected = selectBestTaxonomyCategory_(
+        searchShopifyTaxonomyCategories_(searchTerm),
+        searchTerm);
+  } catch (error) {
+    console.warn(
+        `Live Shopify taxonomy lookup failed for “${productType}”: ` +
+        `${error.message}`);
   }
 
-  const partialMatches = categories.filter((category) => {
-    return (
-      normalizeTaxonomyText_(category.leafName)
-          .indexOf(normalizedSearch) !== -1 ||
-      normalizeTaxonomyText_(category.breadcrumb)
-          .indexOf(normalizedSearch) !== -1
-    );
-  });
-
-  if (partialMatches.length === 1) {
-    return partialMatches[0].gid;
+  if (!selected) {
+    try {
+      selected = selectBestTaxonomyCategory_(
+          getLatestPublishedTaxonomyCandidates_(searchTerm),
+          searchTerm);
+    } catch (error) {
+      console.warn(
+          `Published taxonomy fallback failed for “${productType}”: ` +
+          `${error.message}`);
+    }
   }
 
-  // Keep taxonomy optional when there is no safe, unique match.
-  return '';
+  if (selected && selected.gid) {
+    cache.put(
+        cacheKey,
+        JSON.stringify({gid: selected.gid}),
+        MYK_TAXONOMY.cacheSeconds);
+    return selected.gid;
+  }
+
+  // Cache an unresolved automatic lookup, but retain a valid manual fallback.
+  cache.put(
+      cacheKey,
+      JSON.stringify({gid: ''}),
+      Math.min(MYK_TAXONOMY.cacheSeconds, 1800));
+  return normalizedFallback;
 }
 
 /**
- * Downloads and parses Shopify Product Taxonomy release 2026-05.
+ * Searches the taxonomy exposed by the configured Shopify Admin API version.
  */
-function getShopifyTaxonomy2026May_() {
+function searchShopifyTaxonomyCategories_(searchTerm) {
+  const query = `
+    query SearchCurrentProductTaxonomy($search: String!) {
+      taxonomy {
+        categories(first: 50, search: $search) {
+          nodes {
+            id
+            name
+            fullName
+            isLeaf
+            isArchived
+            level
+          }
+        }
+      }
+    }
+  `;
+
+  const payload = callShopifyGraphql_(
+      getCachedShopifyAccessToken_(),
+      query,
+      {search: clean_(searchTerm)});
+
+  const nodes =
+    payload.data &&
+    payload.data.taxonomy &&
+    payload.data.taxonomy.categories &&
+    Array.isArray(payload.data.taxonomy.categories.nodes)
+      ? payload.data.taxonomy.categories.nodes
+      : [];
+
+  return nodes.map((category) => ({
+    gid: category.id,
+    leafName: category.name,
+    breadcrumb: category.fullName,
+    isLeaf: category.isLeaf === true,
+    isArchived: category.isArchived === true,
+    level: Number(category.level) || 0,
+  }));
+}
+
+/**
+ * Selects a category only when the search identifies it safely.
+ */
+function selectBestTaxonomyCategory_(categories, searchTerm) {
+  const normalizedSearch = normalizeTaxonomyText_(searchTerm);
+
+  if (!normalizedSearch || !Array.isArray(categories)) {
+    return null;
+  }
+
+  const available = categories.filter((category) => {
+    return category && category.gid && !category.isArchived;
+  });
+
+  const exactBreadcrumbMatches = available.filter((category) => {
+    return normalizeTaxonomyText_(category.breadcrumb) === normalizedSearch;
+  });
+
+  if (exactBreadcrumbMatches.length === 1) {
+    return exactBreadcrumbMatches[0];
+  }
+
+  const exactLeafMatches = available.filter((category) => {
+    return normalizeTaxonomyText_(category.leafName) === normalizedSearch;
+  });
+
+  if (exactLeafMatches.length === 1) {
+    return exactLeafMatches[0];
+  }
+
+  const exactLeafCategories = exactLeafMatches.filter((category) => {
+    return category.isLeaf;
+  });
+
+  if (exactLeafCategories.length === 1) {
+    return exactLeafCategories[0];
+  }
+
+  const partialMatches = available.filter((category) => {
+    const leaf = normalizeTaxonomyText_(category.leafName);
+    const breadcrumb = normalizeTaxonomyText_(category.breadcrumb);
+    return (
+      leaf.indexOf(normalizedSearch) !== -1 ||
+      breadcrumb.indexOf(normalizedSearch) !== -1
+    );
+  });
+
+  return partialMatches.length === 1
+    ? partialMatches[0]
+    : null;
+}
+
+/**
+ * Discovers Shopify's latest GitHub release, then downloads its distribution.
+ * If the release asset is temporarily unavailable, main/dist is used.
+ */
+function getLatestPublishedTaxonomyCandidates_(searchTerm) {
+  const version = getLatestPublishedTaxonomyVersion_();
+  const normalizedSearch = normalizeTaxonomyText_(searchTerm);
   const cache = CacheService.getScriptCache();
-  const cacheKey = 'MYK_TAXONOMY_2026_05_MATCH_DATA';
+  const cacheKey =
+    'MYK_TAXONOMY_DIST_' +
+    version.replace(/[^0-9A-Z]+/gi, '_') + '_' +
+    normalizedSearch.replace(/[^a-z0-9]+/g, '_').substring(0, 80);
   const cached = cache.get(cacheKey);
 
   if (cached) {
     return JSON.parse(cached);
   }
 
-  const response = UrlFetchApp.fetch(
-      MYK_TAXONOMY.releaseUrl,
-      {
-        muteHttpExceptions: true,
-        followRedirects: true,
-      });
+  const releaseUrl = version === 'main'
+    ? MYK_TAXONOMY.mainDistributionUrl
+    : MYK_TAXONOMY.publishedReleaseUrlTemplate
+        .replace('{VERSION}', encodeURIComponent(version));
 
-  const status = response.getResponseCode();
+  let text;
 
-  if (status < 200 || status >= 300) {
-    throw new Error(
-        `Taxonomy download failed (${status}).`);
+  try {
+    text = fetchTaxonomyText_(releaseUrl);
+  } catch (releaseError) {
+    console.warn(
+        `Taxonomy release ${version} unavailable; using main: ` +
+        `${releaseError.message}`);
+    text = fetchTaxonomyText_(MYK_TAXONOMY.mainDistributionUrl);
   }
-
-  const text = response.getContentText();
 
   const categories = text
       .split(/\r?\n/)
@@ -983,6 +1162,9 @@ function getShopifyTaxonomy2026May_() {
             path.length > 0
               ? path[path.length - 1]
               : breadcrumb,
+          isLeaf: true,
+          isArchived: false,
+          level: path.length,
         };
       })
       .filter(Boolean);
@@ -992,35 +1174,14 @@ function getShopifyTaxonomy2026May_() {
         'The Shopify taxonomy release contained no readable categories.');
   }
 
-  /*
-   * CacheService has a limited per-item size. Cache only the categories that
-   * match configured search terms instead of the complete taxonomy file.
-   */
-  const configuredTerms = Object.keys(
-      MYK_TAXONOMY.productTypeSearchTerms)
-      .map((key) => {
-        return normalizeTaxonomyText_(
-            MYK_TAXONOMY.productTypeSearchTerms[key]);
-      })
-      .filter(Boolean);
-
   const relevantCategories = categories.filter((category) => {
     const searchable = normalizeTaxonomyText_(
         `${category.leafName} ${category.breadcrumb}`);
-
-    return configuredTerms.some((term) => {
-      return searchable.indexOf(term) !== -1;
-    });
+    return searchable.indexOf(normalizedSearch) !== -1;
   });
 
-  const result =
-    relevantCategories.length > 0
-      ? relevantCategories
-      : categories;
+  const serialized = JSON.stringify(relevantCategories);
 
-  const serialized = JSON.stringify(result);
-
-  // Cache only when it is safely below the CacheService item limit.
   if (serialized.length < 90000) {
     cache.put(
         cacheKey,
@@ -1028,7 +1189,83 @@ function getShopifyTaxonomy2026May_() {
         MYK_TAXONOMY.cacheSeconds);
   }
 
-  return result;
+  return relevantCategories;
+}
+
+function getLatestPublishedTaxonomyVersion_() {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'MYK_TAXONOMY_PUBLISHED_VERSION';
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  let version = '';
+
+  try {
+    const response = UrlFetchApp.fetch(
+        MYK_TAXONOMY.latestReleaseApiUrl,
+        {
+          muteHttpExceptions: true,
+          followRedirects: true,
+          headers: {
+            Accept: 'application/vnd.github+json',
+          },
+        });
+    const status = response.getResponseCode();
+
+    if (status < 200 || status >= 300) {
+      throw new Error(`GitHub releases API returned ${status}`);
+    }
+
+    const payload = JSON.parse(response.getContentText());
+    version = clean_(payload.tag_name).replace(/^v/i, '');
+
+    if (!/^\d{4}-\d{2}$/.test(version)) {
+      throw new Error(`Unexpected release tag: ${payload.tag_name}`);
+    }
+  } catch (error) {
+    /*
+     * The live Shopify Admin taxonomy remains the primary source. If both it
+     * and GitHub's release endpoint are unavailable, main/dist is the last
+     * read-only fallback instead of a permanently pinned old release.
+     */
+    console.warn(
+        `Unable to discover published taxonomy release; using main: ` +
+        `${error.message}`);
+    version = 'main';
+  }
+
+  cache.put(cacheKey, version, MYK_TAXONOMY.cacheSeconds);
+  return version;
+}
+
+function fetchTaxonomyText_(url) {
+  const response = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      Accept: 'text/plain',
+    },
+  });
+  const status = response.getResponseCode();
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`Taxonomy download failed (${status}) from ${url}`);
+  }
+
+  return response.getContentText();
+}
+
+function taxonomyCategoryCacheKey_(normalizedProductType) {
+  return (
+    'MYK_TAXONOMY_CATEGORY_' +
+    MYK_SHOPIFY.apiVersion.replace(/[^0-9A-Z]+/gi, '_') + '_' +
+    normalizedProductType
+        .replace(/[^A-Z0-9]+/g, '_')
+        .substring(0, 120)
+  );
 }
 
 function normalizeProductTypeKey_(value) {
@@ -1127,7 +1364,10 @@ function normalizeTaxonomyCategoryId_(value) {
     return text;
   }
 
-  if (/^sg-\d+(?:-\d+)*$/i.test(text)) {
+  // Shopify taxonomy handles have used prefixes such as sg, aa and os across
+  // releases. Accept the published handle format instead of pinning one
+  // historical prefix.
+  if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/i.test(text)) {
     return (
       'gid://shopify/TaxonomyCategory/' +
       text.toLowerCase()
@@ -1250,6 +1490,14 @@ function preflightReviewRows() {
 
         inventoryItemGid =
           resolution.identity.inventoryItemId;
+
+        // The identity is safe to persist only after Shopify resolution has
+        // returned one unambiguous product and variant.
+        writeSourceShopifyIdentity_(
+            spreadsheet,
+            sourceSheetName,
+            sourceRow,
+            resolution.identity);
       } else {
         productGid = '';
         variantGid = '';
@@ -1314,7 +1562,7 @@ function preflightReviewRows() {
 
   SpreadsheetApp.getUi().alert(
       'Shopify preflight finished.\n\n' +
-      'CREATE_DRAFT: no matching SKU exists.\n' +
+      'CREATE_ACTIVE: no matching SKU or handle exists.\n' +
       'UPDATE_EXISTING: one exact matching SKU exists.\n' +
       'BLOCKED: multiple exact SKU matches or local validation failed.\n' +
       'CHECK_FAILED: Shopify lookup failed.\n\n' +
@@ -1333,7 +1581,7 @@ function preflightReviewRows() {
  *   one has the expected handle    -> UPDATE_EXISTING
  *   No SKU match, handle exists
  *   with exactly one variant       -> UPDATE_EXISTING_BY_HANDLE
- *   No SKU and no handle           -> CREATE_DRAFT
+ *   No SKU and no handle           -> CREATE_ACTIVE
  *   Otherwise                      -> BLOCKED
  */
 function resolveShopifyProductIdentity_(
@@ -1478,9 +1726,9 @@ function resolveShopifyProductIdentity_(
   // Neither SKU nor handle exists.
   if (!handleProduct) {
     return {
-      action: 'CREATE_DRAFT',
+      action: 'CREATE_ACTIVE',
       identity: null,
-      message: 'READY_TO_CREATE',
+      message: 'READY_TO_CREATE_ACTIVE',
     };
   }
 
@@ -1621,6 +1869,7 @@ function getApprovalCandidates() {
           normalize_(row[validationIndex]) ===
             'READY_FOR_SHOPIFY_CHECK' &&
           (
+            normalize_(row[actionIndex]) === 'CREATE_ACTIVE' ||
             normalize_(row[actionIndex]) === 'CREATE_DRAFT' ||
             normalize_(row[actionIndex]) === 'UPDATE_EXISTING'
           ),
@@ -1673,6 +1922,7 @@ function approveSelectedReviewRows(sheetRows) {
     const action = normalize_(row[actionIndex]);
 
     const shopifyValid =
+      action === 'CREATE_ACTIVE' ||
       action === 'CREATE_DRAFT' ||
       action === 'UPDATE_EXISTING';
 
@@ -2064,6 +2314,9 @@ function processApprovedUploadBatch_() {
     const resultIndex =
       requiredColumn_(indices, 'Shopify Result');
 
+    const statusIndex =
+      requiredColumn_(indices, 'Status');
+
     let nextRow = Number(
         properties.getProperty(
             MYK_UPLOAD_JOB.nextRowProperty) || 2);
@@ -2115,7 +2368,7 @@ function processApprovedUploadBatch_() {
 
         incrementUploadJobCounter_(
             MYK_UPLOAD_JOB.processedProperty);
-          } catch (error) {
+      } catch (error) {
         const failureResult =
           `FAILED: ${error.message}`;
 
@@ -2124,6 +2377,12 @@ function processApprovedUploadBatch_() {
             sheetRow,
             approvalIndex,
             'UPLOAD_FAILED');
+
+        writeCell_(
+            reviewSheet,
+            sheetRow,
+            statusIndex,
+            'FAILED');
 
         writeCell_(
             reviewSheet,
@@ -2199,6 +2458,9 @@ function processOneApprovedReviewRow_(
   const typeIndex =
     requiredColumn_(indices, 'Product Type');
 
+  const statusIndex =
+    requiredColumn_(indices, 'Status');
+
   const taxonomyIndex =
     requiredColumn_(
         indices,
@@ -2266,6 +2528,9 @@ function processOneApprovedReviewRow_(
         'Uploaded At');
 
   const action = normalize_(row[actionIndex]);
+  const isCreateAction =
+    action === 'CREATE_ACTIVE' ||
+    action === 'CREATE_DRAFT';
 
   writeCell_(
       reviewSheet,
@@ -2273,18 +2538,36 @@ function processOneApprovedReviewRow_(
       approvalIndex,
       'PROCESSING');
 
+  writeCell_(
+      reviewSheet,
+      sheetRow,
+      statusIndex,
+      'PROCESSING');
+
   const productInput = {
     handle: clean_(row[handleIndex]),
     title: clean_(row[englishNameIndex]),
     vendor: clean_(row[brandIndex]),
     productType: clean_(row[typeIndex]),
+    status: MYK_SHOPIFY.syncProductStatus,
     descriptionHtml: clean_(row[bodyIndex]),
     tags: parseList_(row[tagsIndex]),
   };
 
-  const taxonomy = clean_(row[taxonomyIndex]);
+  const taxonomy =
+    normalizeTaxonomyCategoryId_(
+        clean_(row[taxonomyIndex])) ||
+    resolveTaxonomyCategoryForProductType_(
+        clean_(row[typeIndex]),
+        '');
+
   if (taxonomy) {
-  productInput.category = taxonomy;
+    productInput.category = taxonomy;
+    writeCell_(
+        reviewSheet,
+        sheetRow,
+        taxonomyIndex,
+        taxonomy);
   }
 
   let identity = {
@@ -2295,14 +2578,16 @@ function processOneApprovedReviewRow_(
   };
 
   if (
-    action === 'CREATE_DRAFT' &&
+    isCreateAction &&
     identity.productId
   ) {
-    // A previous attempt already created the product.
-    // Continue using the saved identity instead of creating a duplicate.
-  } else if (action === 'CREATE_DRAFT') {
-    productInput.status =
-      MYK_SHOPIFY.defaultProductStatus;
+    // A previous attempt already created the product. Complete its product
+    // fields and ACTIVE status instead of creating a duplicate.
+    updateShopifyProduct_(
+        accessToken,
+        identity.productId,
+        productInput);
+  } else if (isCreateAction) {
 
     identity = createShopifyProduct_(
         accessToken,
@@ -2415,13 +2700,12 @@ function processOneApprovedReviewRow_(
       `INVENTORY_VERIFIED=${inventoryResult.quantity}`;
   }
 
-    const productResult =
-    action === 'CREATE_DRAFT'
-      ? 'CREATED_DRAFT'
-      : 'UPDATED_EXISTING';
+  const productResult = isCreateAction
+    ? 'CREATED_ACTIVE'
+    : 'UPDATED_ACTIVE';
 
   const finalResult =
-    `${productResult}; ${inventoryResultText}`;
+    `${productResult}; STATUS=ACTIVE; ${inventoryResultText}`;
 
   writeCell_(
       reviewSheet,
@@ -2450,6 +2734,12 @@ function processOneApprovedReviewRow_(
   writeCell_(
       reviewSheet,
       sheetRow,
+      statusIndex,
+      MYK_SHOPIFY.syncProductStatus);
+
+  writeCell_(
+      reviewSheet,
+      sheetRow,
       resultIndex,
       finalResult);
 
@@ -2459,16 +2749,23 @@ function processOneApprovedReviewRow_(
       uploadedAtIndex,
       new Date());
 
+  writeSourceShopifyIdentity_(
+      spreadsheet,
+      clean_(row[sourceSheetIndex]),
+      Number(row[sourceRowIndex]),
+      identity);
+
   writeSourceUploadResult_(
       spreadsheet,
       clean_(row[sourceSheetIndex]),
       Number(row[sourceRowIndex]),
       finalResult,
-      true);
+      true,
+      taxonomy);
 }
 
 /**
- * Creates one DRAFT Shopify product.
+ * Creates one ACTIVE Shopify product after review approval.
  */
 function createShopifyProduct_(accessToken, productInput) {
   const mutation = `
@@ -2531,6 +2828,12 @@ function createShopifyProduct_(accessToken, productInput) {
         'Shopify did not return the created product identity.');
   }
 
+  if (normalize_(product.status) !== MYK_SHOPIFY.syncProductStatus) {
+    throw new Error(
+        `Shopify created the product with status ${product.status}; ` +
+        `expected ${MYK_SHOPIFY.syncProductStatus}.`);
+  }
+
   return {
     productId: product.id,
     variantId: variant.id,
@@ -2546,7 +2849,7 @@ function createShopifyProduct_(accessToken, productInput) {
 /**
  * Updates product-level fields.
  *
- * Status is intentionally omitted for existing products.
+ * Existing approved products are explicitly moved to ACTIVE.
  */
 function updateShopifyProduct_(
     accessToken,
@@ -2573,8 +2876,6 @@ function updateShopifyProduct_(
       productInput,
       {id: productId});
 
-  delete input.status;
-
   const payload = callShopifyGraphql_(
       accessToken,
       mutation,
@@ -2592,6 +2893,14 @@ function updateShopifyProduct_(
   throwOnUserErrors_(
       result.userErrors,
       'productUpdate failed');
+
+  if (
+    !result.product ||
+    normalize_(result.product.status) !== MYK_SHOPIFY.syncProductStatus
+  ) {
+    throw new Error(
+        `Shopify did not confirm status ${MYK_SHOPIFY.syncProductStatus}.`);
+  }
 }
 
 /**
@@ -3638,6 +3947,7 @@ function writeReviewSheet_(spreadsheet, rows) {
     'Chinese Name': 140,
     'Brand': 100,
     'Product Type': 110,
+    'Status': 80,
     'Shopify Taxonomy ID': 160,
     'SKU': 125,
     'Price': 65,
@@ -3762,6 +4072,120 @@ function getAliasedValue_(
   }
 
   return '';
+}
+
+/**
+ * Returns or creates the source-sheet column used for Shopify taxonomy GIDs.
+ */
+function ensureSourceTaxonomyColumn_(sheet, profile) {
+  const aliases =
+    profile &&
+    profile.aliases &&
+    Array.isArray(profile.aliases.taxonomyCategoryId)
+      ? profile.aliases.taxonomyCategoryId
+      : [];
+  let indices = getColumnIndices(sheet);
+
+  for (let index = 0; index < aliases.length; index += 1) {
+    const position = indices[formatHeaderKey_(aliases[index])];
+
+    if (position !== undefined) {
+      return position;
+    }
+  }
+
+  const column = sheet.getLastColumn() + 1;
+  sheet
+      .getRange(1, column)
+      .setValue('Shopify Taxonomy ID')
+      .setFontWeight('bold');
+
+  indices = getColumnIndices(sheet);
+  return requiredColumn_(indices, 'Shopify Taxonomy ID');
+}
+
+/**
+ * Ensures the source product sheet can permanently store Shopify identities.
+ * All returned positions are zero-based.
+ */
+function ensureSourceShopifyIdentityColumns_(sheet) {
+  const headings = [
+    'Shopify Product GID',
+    'Shopify Variant GID',
+    'Shopify Inventory Item GID',
+  ];
+  let indices = getColumnIndices(sheet);
+
+  headings.forEach((heading) => {
+    const key = formatHeaderKey_(heading);
+
+    if (indices[key] !== undefined) {
+      return;
+    }
+
+    const column = sheet.getLastColumn() + 1;
+    sheet
+        .getRange(1, column)
+        .setValue(heading)
+        .setFontWeight('bold');
+
+    indices = getColumnIndices(sheet);
+  });
+
+  return {
+    productGid: requiredColumn_(
+        indices,
+        'Shopify Product GID'),
+    variantGid: requiredColumn_(
+        indices,
+        'Shopify Variant GID'),
+    inventoryItemGid: requiredColumn_(
+        indices,
+        'Shopify Inventory Item GID'),
+  };
+}
+
+/**
+ * Writes only a verified Shopify identity to its exact source row.
+ */
+function writeSourceShopifyIdentity_(
+    spreadsheet,
+    sourceSheetName,
+    sourceRow,
+    identity) {
+  if (!identity || !identity.productId || !identity.variantId) {
+    return;
+  }
+
+  if (!sourceSheetName) {
+    throw new Error(
+        'Cannot write Shopify identity: source sheet name is missing.');
+  }
+
+  const rowNumber = Number(sourceRow);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error(
+        `Cannot write Shopify identity: invalid source row ${sourceRow}.`);
+  }
+
+  const sheet = requireSheet_(
+      spreadsheet,
+      sourceSheetName);
+  const columns = ensureSourceShopifyIdentityColumns_(sheet);
+
+  sheet
+      .getRange(rowNumber, columns.productGid + 1)
+      .setValue(clean_(identity.productId));
+  sheet
+      .getRange(rowNumber, columns.variantGid + 1)
+      .setValue(clean_(identity.variantId));
+
+  if (clean_(identity.inventoryItemId)) {
+    sheet
+        .getRange(rowNumber, columns.inventoryItemGid + 1)
+        .setValue(clean_(identity.inventoryItemId));
+  }
 }
 
 function requireSheetProfile_(sheetName) {
@@ -3981,6 +4405,28 @@ function clean_(value) {
 function ensureSourceResultColumns_(sheet) {
   let indices = getColumnIndices(sheet);
 
+  if (indices.shopify_taxonomy_id === undefined) {
+    const column = sheet.getLastColumn() + 1;
+
+    sheet
+        .getRange(1, column)
+        .setValue('Shopify Taxonomy ID')
+        .setFontWeight('bold');
+
+    indices = getColumnIndices(sheet);
+  }
+
+  if (indices.status === undefined) {
+    const column = sheet.getLastColumn() + 1;
+
+    sheet
+        .getRange(1, column)
+        .setValue('Status')
+        .setFontWeight('bold');
+
+    indices = getColumnIndices(sheet);
+  }
+
   if (indices.upload_result === undefined) {
     const column = sheet.getLastColumn() + 1;
 
@@ -4011,7 +4457,8 @@ function writeSourceUploadResult_(
     sourceSheetName,
     sourceRow,
     result,
-    wasSuccessful) {
+    wasSuccessful,
+    taxonomyCategoryId) {
   if (!sourceSheetName) {
     throw new Error(
         'Cannot write upload result: source sheet name is missing.');
@@ -4035,6 +4482,22 @@ function writeSourceUploadResult_(
       .setValue(result);
 
   if (wasSuccessful) {
+    sheet
+        .getRange(
+            Number(sourceRow),
+            indices.status + 1)
+        .setValue(MYK_SHOPIFY.syncProductStatus);
+
+    const taxonomy = normalizeTaxonomyCategoryId_(taxonomyCategoryId);
+
+    if (taxonomy) {
+      sheet
+          .getRange(
+              Number(sourceRow),
+              indices.shopify_taxonomy_id + 1)
+          .setValue(taxonomy);
+    }
+
     sheet
         .getRange(
             Number(sourceRow),

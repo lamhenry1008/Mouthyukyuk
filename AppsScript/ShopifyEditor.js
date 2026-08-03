@@ -653,6 +653,7 @@ function blankEditorModel() {
 
     images: [],
     driveImages: [],
+    removedShopifyMediaIds: [],
     sourceRows: [],
 
     sourceSpreadsheetId: spreadsheet.getId(),
@@ -725,6 +726,20 @@ function saveCatalogProduct(model) {
   model.sheenColors = normalizeEditorList_(model.sheenColors);
   model.status = clean_(model.status || 'DRAFT').toUpperCase();
 
+  model.removedShopifyMediaIds =
+    normalizeShopifyMediaIds_(model.removedShopifyMediaIds);
+
+  const removedShopifyMediaIdSet = new Set(
+      model.removedShopifyMediaIds);
+
+  // The browser removes staged-for-deletion images from model.images. Repeat
+  // that filtering on the server so image validation never counts a selected
+  // Shopify image that is about to be permanently deleted.
+  model.images = (model.images || []).filter((image) => {
+    return !removedShopifyMediaIdSet.has(
+        clean_(image && image.id));
+  });
+
   model.handle = slugify_(model.handle || model.title);
 
   model.collection = deriveCollectionName_(model.title);
@@ -788,10 +803,10 @@ function saveCatalogProduct(model) {
   if (
     model.id &&
     !(model.images || []).length &&
-    !(model.driveImages || []).length
+    pendingExactImages.length === 0
   ) {
     errors.images =
-      'At least one product image is required';
+      'Keep at least one Shopify image or upload a replacement';
   }
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -981,6 +996,8 @@ function saveCatalogProduct(model) {
         `METAFIELDS_FAILED: ${error.message}`);
   }
 
+  let imageAttachmentSucceeded = true;
+
   try {
     attachImagesToProduct_(
         productId,
@@ -989,8 +1006,33 @@ function saveCatalogProduct(model) {
         }),
         model.title);
   } catch (error) {
+    imageAttachmentSucceeded = false;
+
     warnings.push(
         `IMAGE_UPLOAD_FAILED: ${error.message}`);
+  }
+
+  if (model.removedShopifyMediaIds.length > 0) {
+    if (
+      pendingExactImages.length > 0 &&
+      !imageAttachmentSucceeded
+    ) {
+      // Preserve the old images when their intended replacements could not be
+      // attached. The user can safely retry the same save later.
+      warnings.push(
+          'IMAGE_DELETE_SKIPPED: replacement image upload failed');
+    } else {
+      try {
+        deleteShopifyProductMedia_(
+            productId,
+            model.removedShopifyMediaIds);
+
+        model.removedShopifyMediaIds = [];
+      } catch (error) {
+        warnings.push(
+            `IMAGE_DELETE_FAILED: ${error.message}`);
+      }
+    }
   }
 
   // Refresh exact images only. Never load the complete collection.
@@ -1854,6 +1896,8 @@ function normalizeShopifyProduct_(product) {
             source: 'SHOPIFY',
           })),
 
+    removedShopifyMediaIds: [],
+
     variants:
       (
         product.variants &&
@@ -2049,6 +2093,151 @@ function attachImagesToProduct_(productId, driveFileIds, altText) {
   }`;
   const result = shopifyGraphql_(mutation, {id: productId, media}).productCreateMedia;
   throwUserErrors_(result.mediaUserErrors, 'productCreateMedia');
+}
+
+/**
+ * Normalizes Shopify MediaImage GIDs supplied by the editor.
+ *
+ * Only MediaImage IDs are accepted because the editor currently renders and
+ * removes images only. This also prevents a modified browser payload from
+ * attempting to delete another kind of Shopify file.
+ */
+function normalizeShopifyMediaIds_(mediaIds) {
+  const seen = new Set();
+
+  return (Array.isArray(mediaIds) ? mediaIds : [])
+      .map((mediaId) => clean_(mediaId))
+      .filter((mediaId) => {
+        if (
+          !/^gid:\/\/shopify\/MediaImage\/\d+$/.test(mediaId) ||
+          seen.has(mediaId)
+        ) {
+          return false;
+        }
+
+        seen.add(mediaId);
+        return true;
+      });
+}
+
+/**
+ * Permanently deletes selected Shopify product images from the Files/media
+ * library and removes their product references.
+ *
+ * Shopify 2026-07 recommends fileDelete for permanent removal. The mutation
+ * requires the Shopify app's write_files scope and the installing user must
+ * have permission to delete files.
+ */
+function deleteShopifyProductMedia_(productId, mediaIds) {
+  const normalizedProductId = clean_(productId);
+  const requestedMediaIds = normalizeShopifyMediaIds_(mediaIds);
+
+  if (!normalizedProductId || requestedMediaIds.length === 0) {
+    return [];
+  }
+
+  // Never trust media IDs coming from the browser. Confirm that every file is
+  // currently attached to this exact product before permanently deleting it.
+  const productQuery = `
+    query VerifyEditorProductMedia($id: ID!) {
+      product(id: $id) {
+        id
+        media(first: 250) {
+          nodes {
+            id
+          }
+        }
+      }
+    }
+  `;
+
+  const product = shopifyGraphql_(
+      productQuery,
+      {id: normalizedProductId}).product;
+
+  if (!product) {
+    throw new Error(
+        'Cannot delete images because the Shopify product no longer exists.');
+  }
+
+  const attachedMediaIds = new Set(
+      (
+        product.media &&
+        Array.isArray(product.media.nodes)
+          ? product.media.nodes
+          : []
+      ).map((media) => clean_(media.id)));
+
+  const unrelatedMediaIds = requestedMediaIds.filter((mediaId) => {
+    return !attachedMediaIds.has(mediaId);
+  });
+
+  if (unrelatedMediaIds.length > 0) {
+    throw new Error(
+        'One or more selected images are no longer attached to this product. ' +
+        'Reload the editor before trying again.');
+  }
+
+  const mutation = `
+    mutation DeleteEditorProductFiles($fileIds: [ID!]!) {
+      fileDelete(fileIds: $fileIds) {
+        deletedFileIds
+        userErrors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `;
+
+  let result;
+
+  try {
+    result = shopifyGraphql_(
+        mutation,
+        {fileIds: requestedMediaIds}).fileDelete;
+  } catch (error) {
+    const message = clean_(error && error.message);
+
+    if (
+      /access denied|permission|write_files/i.test(message)
+    ) {
+      throw new Error(
+          'Shopify denied permanent image deletion. Add the write_files ' +
+          'scope to the Shopify app, reinstall/update its access, clear the ' +
+          'cached Shopify token, and retry.');
+    }
+
+    throw error;
+  }
+
+  if (!result) {
+    throw new Error(
+        'Shopify returned no fileDelete result.');
+  }
+
+  throwUserErrors_(
+      result.userErrors,
+      'fileDelete');
+
+  const deletedMediaIds = normalizeShopifyMediaIds_(
+      result.deletedFileIds);
+
+  const deletedMediaIdSet = new Set(
+      deletedMediaIds);
+
+  if (
+    requestedMediaIds.some((mediaId) => {
+      return !deletedMediaIdSet.has(mediaId);
+    })
+  ) {
+    throw new Error(
+        'Shopify did not confirm deletion of every selected image. Reload ' +
+        'the editor before trying again.');
+  }
+
+  return deletedMediaIds;
 }
 
 function showCatalogEditor() {

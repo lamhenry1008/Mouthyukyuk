@@ -7,6 +7,7 @@
  */
 const CHECKOUT_CONFIG = Object.freeze({
   sheetName: '訂單紀錄',
+  spreadsheetIdProperty: 'CHECKOUT_SPREADSHEET_ID',
   receiptRootFolderName: '嘴郁郁 Receipt',
   receiptRootFolderProperty: 'CHECKOUT_RECEIPT_FOLDER_ID',
   locationProperty: 'SHOPIFY_LOCATION_ID',
@@ -27,6 +28,11 @@ const CHECKOUT_CONFIG = Object.freeze({
     '信用卡',
     '銀行轉帳',
     '其他',
+  ]),
+  cashierChoices: Object.freeze([
+    'Ellery',
+    'Cindy',
+    'Henry',
   ]),
   statuses: Object.freeze({
     active: 'ACTIVE',
@@ -70,21 +76,97 @@ const CHECKOUT_CONFIG = Object.freeze({
     '收據PDF連結',
     '收據PDF ID',
     '庫存狀態',
+    '來源銷售已記錄',
     '訂單總額',
     '最後操作',
   ]),
 });
 
-function showCheckoutDialog() {
-  const html = HtmlService
+/**
+ * Serves Checkout as a standalone Apps Script web app.
+ * Deploy this project as a web app, then launch it once from the bound Sheet
+ * so CHECKOUT_SPREADSHEET_ID can be recorded for web-app requests.
+ */
+function doGet() {
+  return HtmlService
       .createTemplateFromFile('Checkout')
       .evaluate()
-      .setWidth(1180)
-      .setHeight(780);
+      .setTitle('Mouthyukyuk Checkout');
+}
 
-  SpreadsheetApp.getUi().showModalDialog(
-      html,
-      'Checkout');
+/**
+ * Menu-compatible launcher. The checkout itself opens in a browser tab, not
+ * inside a spreadsheet popup.
+ */
+function showCheckoutDialog() {
+  return showCheckoutApp();
+}
+
+/**
+ * Records the bound spreadsheet and returns the deployed web-app URL.
+ * Editor.html uses this endpoint after opening a browser tab synchronously,
+ * which avoids popup blockers rejecting an asynchronous window.open call.
+ */
+function getCheckoutAppUrl() {
+  const spreadsheet =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  if (spreadsheet) {
+    PropertiesService.getScriptProperties().setProperty(
+        CHECKOUT_CONFIG.spreadsheetIdProperty,
+        spreadsheet.getId());
+  } else if (
+    !PropertiesService.getScriptProperties().getProperty(
+        CHECKOUT_CONFIG.spreadsheetIdProperty)
+  ) {
+    throw new Error(
+        'Open the bound spreadsheet before launching Checkout.');
+  }
+
+  const appUrl = ScriptApp.getService().getUrl();
+
+  if (!appUrl) {
+    throw new Error(
+        'Checkout has not been deployed as a web app. Deploy the Apps ' +
+        'Script project as a web app, then use Checkout again.');
+  }
+
+  return appUrl;
+}
+
+function showCheckoutApp() {
+  const appUrl = getCheckoutAppUrl();
+
+  const safeUrl = checkoutEscapeHtml_(appUrl);
+
+  const launcher = HtmlService
+      .createHtmlOutput(`
+        <!doctype html>
+        <html>
+          <head><base target="_blank"></head>
+          <body style="font:14px Arial,sans-serif;padding:18px;color:#202124">
+            <p>Checkout opens as a standalone app.</p>
+            <p>
+              <a
+                href="${safeUrl}"
+                target="_blank"
+                rel="noopener"
+                style="display:inline-block;padding:9px 14px;border-radius:5px;background:#1769e0;color:#fff;text-decoration:none"
+              >Open Checkout</a>
+            </p>
+            <p style="font-size:12px;color:#5f6368">
+              If the browser previously blocked the new tab, click the button
+              above. This launcher will stay open until you close it.
+            </p>
+          </body>
+        </html>
+      `)
+      .setWidth(390)
+      .setHeight(210);
+
+  SpreadsheetApp.getUi().showModelessDialog(
+      launcher,
+      'Open Checkout');
 }
 
 function getCheckoutBootstrap() {
@@ -95,6 +177,7 @@ function getCheckoutBootstrap() {
     paymentMethods:
       CHECKOUT_CONFIG.paymentMethods.slice(),
     cashiers: checkoutGetCashierOptions_(),
+    customers: checkoutGetCustomerOptions_(),
     recentOrders: findCheckoutOrders(''),
   };
 }
@@ -129,6 +212,7 @@ function checkoutBlankOrder_() {
     cancelledAt: '',
     cancelledBy: '',
     cancellationReason: '',
+    sourceSalesApplied: false,
   };
 }
 
@@ -465,6 +549,7 @@ function saveCheckoutOrder(inputModel) {
       receiptFileId: '',
       receiptFolderId: '',
       inventoryResult: '',
+      sourceSalesApplied: true,
       orderTotal: 0,
       lastAction:
         previous ? 'UPDATED' : 'CREATED',
@@ -473,6 +558,11 @@ function saveCheckoutOrder(inputModel) {
     checkoutValidateOrderHeader_(order);
     checkoutHydrateTrustedVariants_(order);
     checkoutCalculateTotals_(order);
+
+    const sourcePlan =
+      checkoutBuildSourceInventoryPlan_(
+          previous,
+          order);
 
     const imagePlan = checkoutBuildImagePlan_(
         previous,
@@ -512,15 +602,20 @@ function saveCheckoutOrder(inputModel) {
 
     let inventoryResult = null;
     let ledgerWritten = false;
+    let sourceWriteAttempted = false;
 
     try {
       inventoryResult =
-        checkoutApplyInventoryTransition_(
-            previous,
+        checkoutApplySourceInventoryPlan_(
+            sourcePlan,
             order,
             'save');
 
       order.inventoryResult = inventoryResult.message;
+
+      sourceWriteAttempted = true;
+      checkoutApplySourceInventoryPlanToSheets_(
+          sourcePlan);
 
       const receipt = checkoutCreateReceiptPdf_(
           folder,
@@ -531,30 +626,53 @@ function saveCheckoutOrder(inputModel) {
 
       checkoutWriteOrder_(sheet, order);
       ledgerWritten = true;
-      checkoutRefreshSheetFilter_(sheet);
+
+      // A filter-layout problem must not roll back a successfully saved order.
+      try {
+        checkoutRefreshSheetFilter_(sheet);
+      } catch (filterError) {
+        console.warn(filterError);
+      }
     } catch (error) {
-      if (
-        inventoryResult &&
-        inventoryResult.changes.length > 0 &&
-        !ledgerWritten
-      ) {
-        try {
-          checkoutCompensateInventory_(
-              inventoryResult,
-              order,
-              'save',
-              requestKey);
-        } catch (compensationError) {
+      if (!ledgerWritten) {
+        const rollbackErrors = [];
+
+        if (sourceWriteAttempted) {
+          try {
+            checkoutRestoreSourceInventoryPlan_(
+                sourcePlan);
+          } catch (sourceRollbackError) {
+            rollbackErrors.push(
+                `sheet rollback: ${sourceRollbackError.message}`);
+          }
+        }
+
+        if (
+          inventoryResult &&
+          inventoryResult.changes.length > 0
+        ) {
+          try {
+            checkoutCompensateInventory_(
+                inventoryResult,
+                order,
+                'save',
+                requestKey);
+          } catch (compensationError) {
+            rollbackErrors.push(
+                `Shopify rollback: ${compensationError.message}`);
+          }
+        }
+
+        if (rollbackErrors.length > 0) {
           throw new Error(
-              `${error.message} CRITICAL: inventory rollback also failed: ` +
-              compensationError.message);
+              `${error.message} CRITICAL: ${rollbackErrors.join(' | ')}`);
         }
 
         return {
           ok: false,
           message:
-            `${error.message} Shopify inventory was rolled back; ` +
-            'you can safely try saving again.',
+            `${error.message} Sheet sales and Shopify inventory were ` +
+            'rolled back; you can safely try saving again.',
           retryRequestKey: Utilities.getUuid(),
         };
       }
@@ -659,6 +777,7 @@ function cancelCheckoutOrder(
             Session.getActiveUser().getEmail() ||
             previous.cashier,
           cancellationReason,
+          sourceSalesApplied: false,
           lastAction: 'CANCELLED',
         });
 
@@ -666,19 +785,29 @@ function cancelCheckoutOrder(
         cancelled,
         previous.receiptFolderId);
 
+    const sourcePlan =
+      checkoutBuildSourceInventoryPlan_(
+          previous,
+          null);
+
     let inventoryResult = null;
     let ledgerWritten = false;
+    let sourceWriteAttempted = false;
 
     try {
       inventoryResult =
-        checkoutApplyInventoryTransition_(
-            previous,
-            null,
+        checkoutApplySourceInventoryPlan_(
+            sourcePlan,
+            cancelled,
             'cancel',
             cancellationRequestKey);
 
       cancelled.inventoryResult =
         inventoryResult.message;
+
+      sourceWriteAttempted = true;
+      checkoutApplySourceInventoryPlanToSheets_(
+          sourcePlan);
 
       const receipt = checkoutCreateReceiptPdf_(
           folder,
@@ -690,30 +819,52 @@ function cancelCheckoutOrder(
       const sheet = checkoutEnsureSheet_();
       checkoutWriteOrder_(sheet, cancelled);
       ledgerWritten = true;
-      checkoutRefreshSheetFilter_(sheet);
+
+      try {
+        checkoutRefreshSheetFilter_(sheet);
+      } catch (filterError) {
+        console.warn(filterError);
+      }
     } catch (error) {
-      if (
-        inventoryResult &&
-        inventoryResult.changes.length > 0 &&
-        !ledgerWritten
-      ) {
-        try {
-          checkoutCompensateInventory_(
-              inventoryResult,
-              cancelled,
-              'cancel',
-              cancellationRequestKey);
-        } catch (compensationError) {
+      if (!ledgerWritten) {
+        const rollbackErrors = [];
+
+        if (sourceWriteAttempted) {
+          try {
+            checkoutRestoreSourceInventoryPlan_(
+                sourcePlan);
+          } catch (sourceRollbackError) {
+            rollbackErrors.push(
+                `sheet rollback: ${sourceRollbackError.message}`);
+          }
+        }
+
+        if (
+          inventoryResult &&
+          inventoryResult.changes.length > 0
+        ) {
+          try {
+            checkoutCompensateInventory_(
+                inventoryResult,
+                cancelled,
+                'cancel',
+                cancellationRequestKey);
+          } catch (compensationError) {
+            rollbackErrors.push(
+                `Shopify rollback: ${compensationError.message}`);
+          }
+        }
+
+        if (rollbackErrors.length > 0) {
           throw new Error(
-              `${error.message} CRITICAL: inventory rollback also failed: ` +
-              compensationError.message);
+              `${error.message} CRITICAL: ${rollbackErrors.join(' | ')}`);
         }
 
         return {
           ok: false,
           message:
-            `${error.message} Shopify inventory was rolled back; ` +
-            'you can safely try cancelling again.',
+            `${error.message} Sheet sales and Shopify inventory were ` +
+            'rolled back; you can safely try cancelling again.',
           retryRequestKey: Utilities.getUuid(),
         };
       }
@@ -1171,6 +1322,646 @@ function checkoutTrashOwnedReceiptImage_(
   file.setTrashed(true);
 }
 
+/**
+ * Builds the source-sheet sales transaction for a checkout change.
+ *
+ * Sold changes by new order quantity minus the quantity already represented
+ * in Sold. Inventory is always derived as Stock + Purchased - Sold. Existing
+ * orders created before this feature have a blank sourceSalesApplied flag, so
+ * editing them imports their current quantities into Sold exactly once, while
+ * cancelling them restores Shopify to the current sheet formula without
+ * making Sold negative.
+ */
+function checkoutBuildSourceInventoryPlan_(
+    previous,
+    next) {
+  const spreadsheet = checkoutGetSpreadsheet_();
+  const previousQuantities =
+    previous && previous.sourceSalesApplied === true
+      ? checkoutVariantQuantities_(previous)
+      : {};
+  const nextQuantities = checkoutVariantQuantities_(next);
+  const items = {};
+
+  [previous, next].forEach((order) => {
+    (order && order.items || []).forEach((item) => {
+      const key = checkoutVariantIdentityKey_(item);
+
+      if (key) {
+        items[key] = item;
+      }
+    });
+  });
+
+  const usedSourceRows = {};
+
+  return Object.keys(items).map((key) => {
+    const item = items[key];
+    const deltaSold =
+      Number(nextQuantities[key] || 0) -
+      Number(previousQuantities[key] || 0);
+    const target = checkoutResolveCatalogSourceRow_(
+        spreadsheet,
+        item);
+    const targetKey =
+      `${target.sheetName}!${target.rowNumber}`;
+
+    if (usedSourceRows[targetKey]) {
+      throw new Error(
+          `More than one Shopify variant resolves to ${targetKey}. ` +
+          'Give every variant its own source row before checkout.');
+    }
+
+    usedSourceRows[targetKey] = true;
+
+    const columns = checkoutEnsureSourceInventoryColumns_(
+        target.sheet);
+    const stockCell = checkoutCaptureSourceCell_(
+        target.sheet,
+        target.rowNumber,
+        columns.stock);
+    const purchasedCell = checkoutCaptureSourceCell_(
+        target.sheet,
+        target.rowNumber,
+        columns.purchased);
+    const soldCell = checkoutCaptureSourceCell_(
+        target.sheet,
+        target.rowNumber,
+        columns.sold);
+    const inventoryCell = checkoutCaptureSourceCell_(
+        target.sheet,
+        target.rowNumber,
+        columns.inventory);
+
+    const purchased = checkoutSourceWholeNumber_(
+        purchasedCell.value,
+        'Purchased',
+        item);
+    const currentSold = checkoutSourceWholeNumber_(
+        soldCell.value,
+        'Sold',
+        item);
+    const inventoryValue = checkoutOptionalWholeNumber_(
+        inventoryCell.value,
+        'Inventory',
+        item);
+    let stock = checkoutOptionalWholeNumber_(
+        stockCell.value,
+        'Stock',
+        item);
+    let inferredStock = false;
+
+    if (stock === null) {
+      if (inventoryValue === null) {
+        throw new Error(
+            `Source row ${targetKey} has neither Stock nor Inventory for ` +
+            `${item.sku || item.variantId}.`);
+      }
+
+      stock = inventoryValue - purchased + currentSold;
+      inferredStock = true;
+    }
+
+    const newSold = currentSold + deltaSold;
+    const newInventory = stock + purchased - newSold;
+
+    if (!Number.isInteger(newSold) || newSold < 0) {
+      throw new Error(
+          `Checkout would make Sold invalid for ${item.sku || item.variantId} ` +
+          `on ${targetKey}: ${newSold}.`);
+    }
+
+    if (!Number.isInteger(newInventory) || newInventory < 0) {
+      throw new Error(
+          `Insufficient calculated inventory for ` +
+          `${item.sku || item.variantId} on ${targetKey}. ` +
+          `Stock ${stock} + Purchased ${purchased} - Sold ${newSold} = ` +
+          `${newInventory}.`);
+    }
+
+    return {
+      item: {
+        variantId: checkoutClean_(item.variantId),
+        inventoryItemId:
+          checkoutClean_(item.inventoryItemId),
+        sku: checkoutClean_(item.sku),
+        tracked: item.tracked !== false,
+      },
+      sheetName: target.sheetName,
+      rowNumber: target.rowNumber,
+      columns,
+      original: {
+        stock: stockCell,
+        purchased: purchasedCell,
+        sold: soldCell,
+        inventory: inventoryCell,
+      },
+      stock,
+      purchased,
+      currentSold,
+      newSold,
+      newInventory,
+      deltaSold,
+      inferredStock,
+    };
+  });
+}
+
+function checkoutVariantQuantities_(order) {
+  const quantities = {};
+
+  if (
+    !order ||
+    order.status === CHECKOUT_CONFIG.statuses.cancelled
+  ) {
+    return quantities;
+  }
+
+  (order.items || []).forEach((item) => {
+    const key = checkoutVariantIdentityKey_(item);
+
+    if (key) {
+      quantities[key] =
+        Number(quantities[key] || 0) +
+        Number(item.quantity || 0);
+    }
+  });
+
+  return quantities;
+}
+
+function checkoutVariantIdentityKey_(item) {
+  const variantId = checkoutClean_(
+      item && item.variantId);
+  const sku = checkoutClean_(item && item.sku)
+      .toUpperCase();
+
+  return variantId
+    ? `GID:${variantId}`
+    : sku
+      ? `SKU:${sku}`
+      : '';
+}
+
+function checkoutResolveCatalogSourceRow_(
+    spreadsheet,
+    item) {
+  const variantId = checkoutClean_(item.variantId);
+  const sku = checkoutClean_(item.sku).toUpperCase();
+  const gidMatches = [];
+  const skuMatches = [];
+
+  spreadsheet.getSheets().forEach((sheet) => {
+    if (!checkoutIsCatalogSourceSheet_(sheet)) {
+      return;
+    }
+
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+
+    if (lastRow < 2 || lastColumn < 1) {
+      return;
+    }
+
+    const values = sheet
+        .getRange(1, 1, lastRow, lastColumn)
+        .getDisplayValues();
+    const index = checkoutHeaderIndex_(values[0]);
+    const gidColumn = checkoutFindSourceColumn_(
+        index,
+        ['Shopify Variant GID']);
+    const skuColumn = checkoutFindSourceColumn_(
+        index,
+        ['SKU', 'Variant SKU']);
+
+    values.slice(1).forEach((row, offset) => {
+      const match = {
+        sheet,
+        sheetName: sheet.getName(),
+        rowNumber: offset + 2,
+      };
+
+      if (
+        variantId &&
+        gidColumn >= 0 &&
+        checkoutClean_(row[gidColumn]) === variantId
+      ) {
+        gidMatches.push(match);
+      }
+
+      if (
+        sku &&
+        skuColumn >= 0 &&
+        checkoutClean_(row[skuColumn]).toUpperCase() === sku
+      ) {
+        skuMatches.push(match);
+      }
+    });
+  });
+
+  if (gidMatches.length === 1) {
+    return gidMatches[0];
+  }
+
+  if (gidMatches.length > 1) {
+    throw new Error(
+        `Shopify Variant GID appears in ${gidMatches.length} source rows: ` +
+        `${variantId}.`);
+  }
+
+  if (skuMatches.length === 1) {
+    return skuMatches[0];
+  }
+
+  if (skuMatches.length > 1) {
+    throw new Error(
+        `SKU appears in ${skuMatches.length} source rows: ${sku}. ` +
+        'Add the exact Shopify Variant GID to identify one row.');
+  }
+
+  throw new Error(
+      `No original product-sheet row was found for ` +
+      `${sku || variantId || '(unknown variant)'}.`);
+}
+
+function checkoutIsCatalogSourceSheet_(sheet) {
+  const name = checkoutClean_(sheet.getName());
+
+  if (
+    name === CHECKOUT_CONFIG.sheetName ||
+    /^shopify\s.*(?:review|preview|import)/i.test(name)
+  ) {
+    return false;
+  }
+
+  if (sheet.getLastColumn() < 1) {
+    return false;
+  }
+
+  const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getDisplayValues()[0];
+  const index = checkoutHeaderIndex_(headers);
+
+  return (
+    checkoutFindSourceColumn_(
+        index,
+        ['Shopify Variant GID']) >= 0 ||
+    checkoutFindSourceColumn_(
+        index,
+        ['SKU', 'Variant SKU']) >= 0
+  );
+}
+
+function checkoutFindSourceColumn_(index, aliases) {
+  for (let offset = 0; offset < aliases.length; offset += 1) {
+    const column = index[checkoutHeaderKey_(aliases[offset])];
+
+    if (column !== undefined) {
+      return column;
+    }
+  }
+
+  return -1;
+}
+
+function checkoutEnsureSourceInventoryColumns_(sheet) {
+  const definitions = {
+    stock: ['Stock'],
+    purchased: ['Purchased'],
+    sold: ['Sold'],
+    inventory: ['Inventory'],
+  };
+  let headers = sheet
+      .getRange(1, 1, 1, Math.max(1, sheet.getLastColumn()))
+      .getDisplayValues()[0];
+  let index = checkoutHeaderIndex_(headers);
+  const result = {};
+
+  Object.keys(definitions).forEach((field) => {
+    let column = checkoutFindSourceColumn_(
+        index,
+        definitions[field]);
+
+    if (column < 0) {
+      column = sheet.getLastColumn();
+      sheet.getRange(1, column + 1)
+          .setValue(definitions[field][0])
+          .setFontWeight('bold');
+      headers = headers.concat(definitions[field][0]);
+      index = checkoutHeaderIndex_(headers);
+    }
+
+    result[field] = column;
+  });
+
+  return result;
+}
+
+function checkoutCaptureSourceCell_(sheet, row, column) {
+  const range = sheet.getRange(row, column + 1);
+
+  return {
+    value: range.getValue(),
+    formula: range.getFormula(),
+  };
+}
+
+function checkoutOptionalWholeNumber_(value, field, item) {
+  if (checkoutClean_(value) === '') {
+    return null;
+  }
+
+  const parsed = Number(
+      checkoutClean_(value).replace(/,/g, ''));
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(
+        `${field} must be a non-negative whole number for ` +
+        `${item.sku || item.variantId}.`);
+  }
+
+  return parsed;
+}
+
+function checkoutSourceWholeNumber_(value, field, item) {
+  const parsed = checkoutOptionalWholeNumber_(
+      value,
+      field,
+      item);
+
+  return parsed === null ? 0 : parsed;
+}
+
+function checkoutApplySourceInventoryPlanToSheets_(plan) {
+  const spreadsheet = checkoutGetSpreadsheet_();
+
+  plan.forEach((entry) => {
+    const currentTarget = checkoutResolveCatalogSourceRow_(
+        spreadsheet,
+        entry.item);
+
+    if (
+      currentTarget.sheetName !== entry.sheetName
+    ) {
+      throw new Error(
+          `The source row for ${entry.item.sku || entry.item.variantId} ` +
+          'moved to another sheet during checkout. Try again.');
+    }
+
+    entry.rowNumber = currentTarget.rowNumber;
+    const sheet = currentTarget.sheet;
+    const columns = checkoutEnsureSourceInventoryColumns_(sheet);
+    const currentCells = {
+      stock: checkoutCaptureSourceCell_(
+          sheet,
+          entry.rowNumber,
+          columns.stock),
+      purchased: checkoutCaptureSourceCell_(
+          sheet,
+          entry.rowNumber,
+          columns.purchased),
+      sold: checkoutCaptureSourceCell_(
+          sheet,
+          entry.rowNumber,
+          columns.sold),
+      inventory: checkoutCaptureSourceCell_(
+          sheet,
+          entry.rowNumber,
+          columns.inventory),
+    };
+    const sourceChanged = Object.keys(currentCells)
+        .some((field) => {
+          return !checkoutSourceCellMatches_(
+              currentCells[field],
+              entry.original[field]);
+        });
+
+    if (sourceChanged) {
+      throw new Error(
+          `Stock, Purchased, Sold, or Inventory changed for ` +
+          `${entry.item.sku || entry.item.variantId} ` +
+          'while checkout was running. Try again.');
+    }
+
+    entry.columns = columns;
+
+    if (entry.inferredStock) {
+      sheet.getRange(
+          entry.rowNumber,
+          columns.stock + 1).setValue(entry.stock);
+    }
+
+    // Purchased is an input to the calculation, not a checkout output. Keep
+    // an existing value or formula intact; initialize only a genuinely blank
+    // cell so this sync never destroys the merchant's purchase calculation.
+    if (
+      !entry.original.purchased.formula &&
+      checkoutClean_(entry.original.purchased.value) === ''
+    ) {
+      sheet.getRange(
+          entry.rowNumber,
+          columns.purchased + 1)
+          .setValue(0);
+    }
+    sheet.getRange(
+        entry.rowNumber,
+        columns.sold + 1)
+        .setValue(entry.newSold);
+
+    const inventoryColumn = columns.inventory + 1;
+    const stockOffset = columns.stock - columns.inventory;
+    const purchasedOffset =
+      columns.purchased - columns.inventory;
+    const soldOffset = columns.sold - columns.inventory;
+
+    sheet.getRange(entry.rowNumber, inventoryColumn)
+        .setFormulaR1C1(
+            `=RC[${stockOffset}]+RC[${purchasedOffset}]-` +
+            `RC[${soldOffset}]`)
+        .setNumberFormat('0');
+  });
+
+  SpreadsheetApp.flush();
+}
+
+function checkoutSourceCellMatches_(left, right) {
+  const leftFormula = checkoutClean_(left && left.formula);
+  const rightFormula = checkoutClean_(right && right.formula);
+
+  if (leftFormula !== rightFormula) {
+    return false;
+  }
+
+  const leftValue = left ? left.value : '';
+  const rightValue = right ? right.value : '';
+
+  if (
+    typeof leftValue === 'number' ||
+    typeof rightValue === 'number'
+  ) {
+    return Number(leftValue) === Number(rightValue);
+  }
+
+  return checkoutClean_(leftValue) ===
+    checkoutClean_(rightValue);
+}
+
+function checkoutRestoreSourceInventoryPlan_(plan) {
+  const spreadsheet = checkoutGetSpreadsheet_();
+  const errors = [];
+
+  plan.slice().reverse().forEach((entry) => {
+    try {
+      const target = checkoutResolveCatalogSourceRow_(
+          spreadsheet,
+          entry.item);
+      const columns = checkoutEnsureSourceInventoryColumns_(
+          target.sheet);
+
+      checkoutRestoreSourceCell_(
+          target.sheet,
+          target.rowNumber,
+          columns.stock,
+          entry.original.stock);
+      checkoutRestoreSourceCell_(
+          target.sheet,
+          target.rowNumber,
+          columns.purchased,
+          entry.original.purchased);
+      checkoutRestoreSourceCell_(
+          target.sheet,
+          target.rowNumber,
+          columns.sold,
+          entry.original.sold);
+      checkoutRestoreSourceCell_(
+          target.sheet,
+          target.rowNumber,
+          columns.inventory,
+          entry.original.inventory);
+    } catch (error) {
+      errors.push(
+          `${entry.sheetName}!${entry.rowNumber}: ${error.message}`);
+    }
+  });
+
+  SpreadsheetApp.flush();
+
+  if (errors.length > 0) {
+    throw new Error(errors.join(' | '));
+  }
+}
+
+function checkoutRestoreSourceCell_(
+    sheet,
+    row,
+    column,
+    original) {
+  const range = sheet.getRange(row, column + 1);
+
+  if (original && original.formula) {
+    range.setFormula(original.formula);
+  } else {
+    range.setValue(original ? original.value : '');
+  }
+}
+
+/**
+ * Aligns Shopify available quantities to the source-sheet formula targets.
+ * It calculates a compare-and-swap delta from the current Shopify quantity,
+ * so a checkout is never decremented once by the sheet and again by Shopify.
+ */
+function checkoutApplySourceInventoryPlan_(
+    plan,
+    order,
+    action,
+    operationKey) {
+  const trackedEntries = plan.filter((entry) => {
+    return entry.item.tracked !== false;
+  });
+
+  trackedEntries.forEach((entry) => {
+    if (!entry.item.inventoryItemId) {
+      throw new Error(
+          `Tracked item has no Shopify inventory identity: ` +
+          `${entry.item.sku || entry.item.variantId}.`);
+    }
+  });
+
+  const locationId = getRequiredScriptProperty_(
+      CHECKOUT_CONFIG.locationProperty);
+  const states = checkoutReadInventoryStates_(
+      trackedEntries.map((entry) => {
+        return entry.item.inventoryItemId;
+      }),
+      locationId);
+  const seenInventoryItems = {};
+  const changes = [];
+
+  trackedEntries.forEach((entry) => {
+    const inventoryItemId =
+      entry.item.inventoryItemId;
+
+    if (seenInventoryItems[inventoryItemId]) {
+      throw new Error(
+          `Shopify inventory item is mapped more than once: ` +
+          `${entry.item.sku || inventoryItemId}.`);
+    }
+
+    seenInventoryItems[inventoryItemId] = true;
+    const state = states[inventoryItemId];
+
+    if (!state || !state.tracked || !state.levelExists) {
+      throw new Error(
+          `Shopify inventory is unavailable for ` +
+          `${entry.item.sku || inventoryItemId}.`);
+    }
+
+    const delta = entry.newInventory - state.available;
+
+    if (delta !== 0) {
+      changes.push({
+        inventoryItemId,
+        delta,
+        changeFromQuantity: state.available,
+      });
+    }
+  });
+
+  if (changes.length === 0) {
+    return {
+      message:
+        `SOURCE_UPDATED: ${plan.length}; SHOPIFY_ALREADY_ALIGNED`,
+      changes: [],
+    };
+  }
+
+  const idempotencyKey = checkoutUuidFromText_([
+    order.orderId,
+    order.version,
+    action,
+    operationKey || order.lastRequestKey || '',
+    'source-aligned',
+  ].join(':'));
+  const referenceDocumentUri =
+    `mouthyukyuk-checkout://order/` +
+    `${encodeURIComponent(order.orderId)}/` +
+    `v${order.version}/source-aligned`;
+  const result = checkoutCommitInventoryDeltas_(
+      changes,
+      locationId,
+      idempotencyKey,
+      referenceDocumentUri);
+
+  return {
+    message:
+      `SOURCE_UPDATED: ${plan.length}; ` +
+      `SHOPIFY_INVENTORY_SYNCED: ${changes.length}`,
+    changes,
+    group: result.inventoryAdjustmentGroup || null,
+  };
+}
+
 function checkoutApplyInventoryTransition_(
     previous,
     next,
@@ -1330,15 +2121,15 @@ function checkoutCommitInventoryDeltas_(
                 change.inventoryItemId,
               locationId,
               delta: change.delta,
+              // Shopify 2026-07 requires this field to be present. A number
+              // enables CAS protection; null is an explicit opt-out used only
+              // by callers that did not supply an expected quantity.
+              changeFromQuantity:
+                change.changeFromQuantity == null ||
+                change.changeFromQuantity === ''
+                  ? null
+                  : Number(change.changeFromQuantity),
             };
-
-            if (
-              Number.isFinite(
-                  Number(change.changeFromQuantity))
-            ) {
-              input.changeFromQuantity =
-                Number(change.changeFromQuantity);
-            }
 
             return input;
           }),
@@ -1377,6 +2168,14 @@ function checkoutCompensateInventory_(
   const reverseDeltas = changes.map((change) => ({
     inventoryItemId: change.inventoryItemId,
     delta: -Number(change.delta),
+    // The first mutation expected changeFromQuantity and then applied delta,
+    // so its resulting quantity is the safe CAS value for compensation.
+    changeFromQuantity:
+      change.changeFromQuantity == null ||
+      change.changeFromQuantity === ''
+        ? null
+        : Number(change.changeFromQuantity) +
+          Number(change.delta),
   }));
 
   const locationId = getRequiredScriptProperty_(
@@ -1688,12 +2487,7 @@ function checkoutReceiptHtml_(order) {
 }
 
 function checkoutEnsureSheet_() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-
-  if (!spreadsheet) {
-    throw new Error(
-        'Checkout must run from the bound spreadsheet.');
-  }
+  const spreadsheet = checkoutGetSpreadsheet_();
 
   let sheet = spreadsheet.getSheetByName(
       CHECKOUT_CONFIG.sheetName);
@@ -1756,6 +2550,39 @@ function checkoutEnsureSheet_() {
   }
 
   return sheet;
+}
+
+/**
+ * Resolves the catalog spreadsheet in either bound-script or web-app context.
+ */
+function checkoutGetSpreadsheet_() {
+  const active = SpreadsheetApp.getActiveSpreadsheet();
+  const properties =
+    PropertiesService.getScriptProperties();
+
+  if (active) {
+    properties.setProperty(
+        CHECKOUT_CONFIG.spreadsheetIdProperty,
+        active.getId());
+    return active;
+  }
+
+  const spreadsheetId = properties.getProperty(
+      CHECKOUT_CONFIG.spreadsheetIdProperty);
+
+  if (!spreadsheetId) {
+    throw new Error(
+        'Checkout is not connected to a spreadsheet. Open the bound ' +
+        'spreadsheet and choose Shopify Editor > Checkout once.');
+  }
+
+  try {
+    return SpreadsheetApp.openById(spreadsheetId);
+  } catch (error) {
+    throw new Error(
+        `Cannot open the configured checkout spreadsheet ` +
+        `(${spreadsheetId}). Check sharing and authorization.`);
+  }
 }
 
 function checkoutRefreshSheetFilter_(sheet) {
@@ -2006,6 +2833,10 @@ function checkoutRecordForItem_(order, item) {
     '收據PDF連結': order.receiptUrl,
     '收據PDF ID': order.receiptFileId,
     '庫存狀態': order.inventoryResult,
+    '來源銷售已記錄':
+      order.sourceSalesApplied === true
+        ? 'TRUE'
+        : 'FALSE',
     '訂單總額': order.orderTotal,
     '最後操作': order.lastAction,
   };
@@ -2181,6 +3012,10 @@ function checkoutOrderFromRows_(rows) {
       checkoutClean_(get(base, '收據PDF ID')),
     inventoryResult:
       checkoutClean_(get(base, '庫存狀態')),
+    sourceSalesApplied:
+      checkoutClean_(
+          get(base, '來源銷售已記錄'))
+          .toUpperCase() === 'TRUE',
     orderTotal:
       checkoutMoney_(get(base, '訂單總額')),
     lastAction:
@@ -2286,13 +3121,8 @@ function checkoutDriveThumbnailUrl_(fileId) {
 }
 
 function checkoutGetCashierOptions_() {
-  const values = [];
-  const activeEmail =
-    Session.getActiveUser().getEmail();
-
-  if (activeEmail) {
-    values.push(activeEmail);
-  }
+  const fixed = CHECKOUT_CONFIG.cashierChoices.slice();
+  const values = fixed.slice();
 
   const groups = checkoutReadOrderGroups_();
 
@@ -2305,7 +3135,59 @@ function checkoutGetCashierOptions_() {
     }
   });
 
-  return checkoutUnique_(values).sort();
+  const fixedKeys = {};
+
+  fixed.forEach((name) => {
+    fixedKeys[checkoutClean_(name).toUpperCase()] = true;
+  });
+
+  const otherValues = checkoutUnique_(values)
+      .filter((name) => {
+        return !fixedKeys[
+            checkoutClean_(name).toUpperCase()];
+      })
+      .sort();
+
+  return fixed.concat(otherValues);
+}
+
+/**
+ * Returns saved customers for the searchable name dropdown. The latest order
+ * wins, so selecting a returning customer can also restore phone and email.
+ */
+function checkoutGetCustomerOptions_() {
+  const groups = checkoutReadOrderGroups_();
+  const orders = Object.keys(groups)
+      .map((orderId) => {
+        return checkoutOrderFromRows_(groups[orderId]);
+      })
+      .filter((order) => order && order.customerName)
+      .sort((left, right) => {
+        return checkoutDateNumber_(right.updatedAt) -
+          checkoutDateNumber_(left.updatedAt);
+      });
+  const seen = {};
+  const result = [];
+
+  orders.forEach((order) => {
+    const key = checkoutClean_(order.customerName)
+        .toUpperCase();
+
+    if (!key || seen[key]) {
+      return;
+    }
+
+    seen[key] = true;
+    result.push({
+      name: checkoutClean_(order.customerName),
+      phone: checkoutClean_(order.customerPhone),
+      email: checkoutClean_(order.customerEmail),
+    });
+  });
+
+  return result.sort((left, right) => {
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function checkoutGetOrderFolder_(

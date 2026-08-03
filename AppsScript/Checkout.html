@@ -1,4 +1,5 @@
 
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -861,14 +862,21 @@
 
             <div id="field-cashier" class="field">
               <label for="cashier">Cashier <span class="required-marker">*</span></label>
-              <input id="cashier" list="cashier-options" autocomplete="off" required>
-              <datalist id="cashier-options"></datalist>
+              <select id="cashier" required></select>
+              <input
+                id="cashier-other"
+                class="cashier-other"
+                autocomplete="off"
+                placeholder="Enter cashier name"
+                hidden
+              >
               <div class="field-error"></div>
             </div>
 
             <div id="field-customerName" class="field span-2">
               <label for="customer-name">Customer name <span class="required-marker">*</span></label>
-              <input id="customer-name" autocomplete="name" required>
+              <input id="customer-name" list="customer-options" autocomplete="name" required>
+              <datalist id="customer-options"></datalist>
               <div class="field-error"></div>
             </div>
 
@@ -1025,6 +1033,7 @@
     let catalogVariants = [];
     let busyDepth = 0;
     let cleanOrderFingerprint = '';
+    const OTHER_CASHIER_VALUE = '__OTHER__';
 
     const elements = {};
 
@@ -1300,6 +1309,81 @@
       });
     }
 
+    function populateCashierChoices(selectedValue) {
+      const fixed = uniqueStrings(
+        Array.isArray(bootstrap.cashiers) && bootstrap.cashiers.length
+          ? bootstrap.cashiers
+          : ['Ellery', 'Cindy', 'Henry']
+      );
+      const selected = clean(selectedValue);
+      const isFixed = fixed.some(
+        (value) => value.toUpperCase() === selected.toUpperCase()
+      );
+
+      elements.cashier.replaceChildren();
+
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Choose cashier';
+      elements.cashier.appendChild(placeholder);
+
+      fixed.forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        elements.cashier.appendChild(option);
+      });
+
+      const other = document.createElement('option');
+      other.value = OTHER_CASHIER_VALUE;
+      other.textContent = 'Other…';
+      elements.cashier.appendChild(other);
+
+      if (selected && !isFixed) {
+        elements.cashier.value = OTHER_CASHIER_VALUE;
+        elements.cashierOther.value = selected;
+        elements.cashierOther.hidden = false;
+      } else {
+        elements.cashier.value = selected;
+        elements.cashierOther.value = '';
+        elements.cashierOther.hidden = true;
+      }
+    }
+
+    function customerNames() {
+      return (Array.isArray(bootstrap.customers) ? bootstrap.customers : [])
+        .map((customer) => typeof customer === 'string' ? customer : customer && customer.name)
+        .map(clean)
+        .filter(Boolean);
+    }
+
+    function populateCustomerChoices() {
+      populateDatalist(elements.customerOptions, customerNames());
+    }
+
+    function applySavedCustomerDetails() {
+      const name = clean(elements.customerName.value).toUpperCase();
+      const customer = (Array.isArray(bootstrap.customers) ? bootstrap.customers : [])
+        .find((entry) => {
+          const entryName = typeof entry === 'string' ? entry : entry && entry.name;
+          return clean(entryName).toUpperCase() === name;
+        });
+
+      if (!customer || typeof customer === 'string') {
+        return;
+      }
+
+      if (!clean(elements.customerPhone.value) && customer.phone) {
+        elements.customerPhone.value = clean(customer.phone);
+        order.customerPhone = clean(customer.phone);
+      }
+
+      if (!clean(elements.customerEmail.value) && customer.email) {
+        elements.customerEmail.value = clean(customer.email);
+        order.customerEmail = clean(customer.email);
+      }
+    }
+
     function uniqueStrings(values) {
       const seen = new Set();
 
@@ -1350,10 +1434,10 @@
 
     function syncFormFromOrder() {
       populatePaymentMethods(order.paymentMethod);
+      populateCashierChoices(order.cashier);
       elements.orderId.value = order.orderId;
       elements.orderStatus.value = order.status;
       elements.transactionDate.value = localDateTimeValue(order.transactionDate);
-      elements.cashier.value = order.cashier;
       elements.customerName.value = order.customerName;
       elements.customerPhone.value = order.customerPhone;
       elements.customerEmail.value = order.customerEmail;
@@ -1363,7 +1447,9 @@
 
     function syncOrderFromForm() {
       order.transactionDate = elements.transactionDate.value;
-      order.cashier = clean(elements.cashier.value);
+      order.cashier = elements.cashier.value === OTHER_CASHIER_VALUE
+        ? clean(elements.cashierOther.value)
+        : clean(elements.cashier.value);
       order.customerName = clean(elements.customerName.value);
       order.customerPhone = clean(elements.customerPhone.value);
       order.customerEmail = clean(elements.customerEmail.value);
@@ -1450,6 +1536,7 @@
       const formControls = [
         elements.transactionDate,
         elements.cashier,
+        elements.cashierOther,
         elements.customerName,
         elements.customerPhone,
         elements.customerEmail,
@@ -2276,7 +2363,23 @@
 
       markOrderClean();
       revokeNewImageUrls(order && order.receiptImages);
-      google.script.host.close();
+
+      // Standalone web-app tabs can close themselves when browser policy
+      // permits. In the legacy container fallback, close the host dialog.
+      try {
+        if (window.opener) {
+          window.close();
+          return;
+        }
+      } catch (error) {
+        // Continue to the container fallback.
+      }
+
+      try {
+        google.script.host.close();
+      } catch (error) {
+        setStatus('You can close this browser tab.', 'success');
+      }
     }
 
     function validateOrder() {
@@ -2569,6 +2672,29 @@
         const savedOrder = result.order || result;
         revokeNewImageUrls(order.receiptImages);
         order = normalizeOrder(savedOrder);
+
+        const customerKey = clean(order.customerName).toUpperCase();
+        const customers = Array.isArray(bootstrap.customers)
+          ? bootstrap.customers
+          : [];
+        const existingCustomer = customers.find((entry) => {
+          const name = typeof entry === 'string' ? entry : entry && entry.name;
+          return clean(name).toUpperCase() === customerKey;
+        });
+
+        if (existingCustomer && typeof existingCustomer !== 'string') {
+          existingCustomer.phone = order.customerPhone;
+          existingCustomer.email = order.customerEmail;
+        } else if (!existingCustomer && order.customerName) {
+          customers.push({
+            name: order.customerName,
+            phone: order.customerPhone,
+            email: order.customerEmail,
+          });
+        }
+
+        bootstrap.customers = customers;
+        populateCustomerChoices();
         renderOrder();
 
         const warnings = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
@@ -2698,8 +2824,9 @@
       elements.orderStatus = $('order-status');
       elements.transactionDate = $('transaction-date');
       elements.cashier = $('cashier');
-      elements.cashierOptions = $('cashier-options');
+      elements.cashierOther = $('cashier-other');
       elements.customerName = $('customer-name');
+      elements.customerOptions = $('customer-options');
       elements.customerPhone = $('customer-phone');
       elements.customerEmail = $('customer-email');
       elements.paymentMethod = $('payment-method');
@@ -2768,8 +2895,29 @@
       });
 
       bindFormField(elements.transactionDate, 'transactionDate', 'change');
-      bindFormField(elements.cashier, 'cashier');
+      elements.cashier.addEventListener('change', () => {
+        const isOther = elements.cashier.value === OTHER_CASHIER_VALUE;
+        elements.cashierOther.hidden = !isOther;
+
+        if (isOther) {
+          elements.cashierOther.focus();
+        } else {
+          elements.cashierOther.value = '';
+        }
+
+        syncOrderFromForm();
+        clearFieldError('cashier');
+      });
+
+      elements.cashierOther.addEventListener('input', () => {
+        syncOrderFromForm();
+        clearFieldError('cashier');
+      });
+
       bindFormField(elements.customerName, 'customerName');
+      elements.customerName.addEventListener('change', () => {
+        applySavedCustomerDetails();
+      });
       bindFormField(elements.customerPhone, 'customerPhone');
       bindFormField(elements.customerEmail, 'customerEmail');
       bindFormField(elements.paymentMethod, 'paymentMethod', 'change');
@@ -2823,7 +2971,7 @@
 
       try {
         bootstrap = (await serverCall('getCheckoutBootstrap')) || {};
-        populateDatalist(elements.cashierOptions, bootstrap.cashiers || []);
+        populateCustomerChoices();
         currentSearchResults = normalizeOrderSummaries(
           bootstrap.recentOrders || []
         );
@@ -2846,4 +2994,3 @@
   </script>
 </body>
 </html>
-
