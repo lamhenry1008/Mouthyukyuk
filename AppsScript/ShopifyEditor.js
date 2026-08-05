@@ -26,6 +26,8 @@ const APP = Object.freeze({
     baseColors: ['Ink Base Color', 'Ink Base Colors'],
     glitterColors: ['Ink Glitter Color', 'Ink Glitter Colors'],
     sheenColors: ['Ink Sheen Color', 'Ink Sheen Colors'],
+    glitterPotionColor: ['Glitter Potion Color', 'Glitter Color'],
+    glitterPotionSize: ['Glitter Potion Size', 'Glitter Size'],
     descriptionHtml: ['Desc', 'Description', 'Body HTML', 'Body (HTML)'],
     tags: ['Label Tag', 'Tags'],
     sku: ['SKU', 'Variant SKU'],
@@ -56,7 +58,9 @@ const APP = Object.freeze({
 const EDITOR_ITEM_TYPE_CODES = Object.freeze({
   'INK': 'INK',
   'FOUNTAIN PEN INK': 'INK',
-  'GLITTER POTION': 'INK',
+  'CALLIGRAPHY INK': 'INK',
+  'GLITTER POTION': 'GP',
+  'GP': 'GP',
   'FOUNTAIN PEN': 'PEN',
   'DIP PEN': 'PEN',
   'NOTEBOOK': 'NOTEBOOK',
@@ -139,6 +143,8 @@ const EDITOR_DEFAULT_OPTIONS = Object.freeze({
     'Violet Sheen',
     'Yellow Sheen',
   ],
+  glitterPotionColors: [],
+  glitterPotionSizes: [],
 });
 
 function onOpen() {
@@ -292,6 +298,10 @@ function getEditorOptions() {
     baseColors: EDITOR_DEFAULT_OPTIONS.baseColors.slice(),
     glitterColors: EDITOR_DEFAULT_OPTIONS.glitterColors.slice(),
     sheenColors: EDITOR_DEFAULT_OPTIONS.sheenColors.slice(),
+    glitterPotionColors:
+      EDITOR_DEFAULT_OPTIONS.glitterPotionColors.slice(),
+    glitterPotionSizes:
+      EDITOR_DEFAULT_OPTIONS.glitterPotionSizes.slice(),
   };
 
   const fieldMap = {
@@ -303,6 +313,8 @@ function getEditorOptions() {
     baseColors: 'baseColors',
     glitterColors: 'glitterColors',
     sheenColors: 'sheenColors',
+    glitterPotionColors: 'glitterPotionColor',
+    glitterPotionSizes: 'glitterPotionSize',
   };
 
   spreadsheet.getSheets().forEach((sheet) => {
@@ -648,6 +660,8 @@ function blankEditorModel() {
       inventoryItemId: '',
       tracked: true,
       writeInventory: true,
+      glitterPotionColor: '',
+      glitterPotionSize: '',
       optionValues: [],
     }],
 
@@ -664,6 +678,9 @@ function blankEditorModel() {
 
 function validateEditorModel_(model) {
   const errors = {};
+  const isGlitterPotion =
+    clean_(model.targetSheetName) === '閃粉' ||
+    normalize_(model.productType) === 'GLITTER POTION';
 
   APP.requiredProductFields.forEach((key) => {
     if (!clean_(model[key])) {
@@ -712,6 +729,14 @@ function validateEditorModel_(model) {
       errors[`variant_${index}_inventory`] =
         'Enter zero or a positive whole number';
     }
+
+    if (isGlitterPotion && !clean_(variant.glitterPotionColor)) {
+      errors[`variant_${index}_glitterPotionColor`] = 'Required';
+    }
+
+    if (isGlitterPotion && !clean_(variant.glitterPotionSize)) {
+      errors[`variant_${index}_glitterPotionSize`] = 'Required';
+    }
   });
 
   return errors;
@@ -725,6 +750,37 @@ function saveCatalogProduct(model) {
   model.glitterColors = normalizeEditorList_(model.glitterColors);
   model.sheenColors = normalizeEditorList_(model.sheenColors);
   model.status = clean_(model.status || 'DRAFT').toUpperCase();
+
+  (model.variants || []).forEach((variant) => {
+    variant.glitterPotionColor = clean_(
+        variant.glitterPotionColor);
+    variant.glitterPotionSize = clean_(
+        variant.glitterPotionSize);
+
+    const otherOptions = (variant.optionValues || []).filter((option) => {
+      const name = normalize_(option && option.optionName);
+      return (
+        name !== 'GLITTER POTION COLOR' &&
+        name !== 'GLITTER POTION SIZE'
+      );
+    });
+
+    if (variant.glitterPotionColor) {
+      otherOptions.push({
+        optionName: 'Glitter Potion Color',
+        name: variant.glitterPotionColor,
+      });
+    }
+
+    if (variant.glitterPotionSize) {
+      otherOptions.push({
+        optionName: 'Glitter Potion Size',
+        name: variant.glitterPotionSize,
+      });
+    }
+
+    variant.optionValues = otherOptions;
+  });
 
   model.removedShopifyMediaIds =
     normalizeShopifyMediaIds_(model.removedShopifyMediaIds);
@@ -745,13 +801,22 @@ function saveCatalogProduct(model) {
   model.collection = deriveCollectionName_(model.title);
 
   const wasNewEditorProduct = !clean_(model.id);
+  const generatedEditorItemId = buildEditorItemId_(
+      model.productType,
+      model.variants && model.variants[0]
+        ? model.variants[0].sku
+        : '');
+  const hasLegacyCalligraphyItemId =
+    normalizeEditorProductTypeKey_(model.productType) ===
+      'CALLIGRAPHY INK' &&
+    /^CALLIGRAPHY-INK-/i.test(clean_(model.itemId));
 
-  if (wasNewEditorProduct || !clean_(model.itemId)) {
-    model.itemId = buildEditorItemId_(
-        model.productType,
-        model.variants && model.variants[0]
-          ? model.variants[0].sku
-          : '');
+  if (
+    wasNewEditorProduct ||
+    !clean_(model.itemId) ||
+    hasLegacyCalligraphyItemId
+  ) {
+    model.itemId = generatedEditorItemId;
   }
 
   model.taxonomyCategoryId =
@@ -909,6 +974,34 @@ function saveCatalogProduct(model) {
     getRequiredScriptProperty_(
         'SHOPIFY_LOCATION_ID');
 
+  if (!wasNewProduct && model.optionNames.length > 0) {
+    const representativeOptions = model.optionNames
+        .map((optionName) => {
+          for (let index = 0; index < model.variants.length; index += 1) {
+            const match = (model.variants[index].optionValues || [])
+                .find((option) => {
+                  return normalize_(option.optionName) ===
+                    normalize_(optionName);
+                });
+
+            if (match && clean_(match.name)) {
+              return {
+                optionName,
+                name: clean_(match.name),
+              };
+            }
+          }
+
+          return null;
+        })
+        .filter(Boolean);
+
+    ensureShopifyProductOptions_(
+        accessToken,
+        productId,
+        representativeOptions);
+  }
+
   const warnings = [];
   const savedVariants = [];
 
@@ -927,6 +1020,7 @@ function saveCatalogProduct(model) {
     }
 
     const saved = saveVariant_(
+        accessToken,
         productId,
         candidate,
         !candidate.id);
@@ -971,6 +1065,31 @@ function saveCatalogProduct(model) {
       candidate.editorResult = 'INVENTORY_NOT_CHANGED';
     }
 
+    if (
+      candidate.glitterPotionColor ||
+      candidate.glitterPotionSize
+    ) {
+      try {
+        setShopifyVariantMetafields_(
+            accessToken,
+            candidate.id,
+            {
+              itemId:
+                buildEditorItemId_(
+                    model.productType,
+                    candidate.sku),
+              glitterPotionColor:
+                candidate.glitterPotionColor,
+              glitterPotionSize:
+                candidate.glitterPotionSize,
+            });
+      } catch (error) {
+        warnings.push(
+            `${candidate.sku}: VARIANT_METAFIELDS_FAILED: ` +
+            `${error.message}`);
+      }
+    }
+
     candidate.writeInventory = false;
     savedVariants.push(candidate);
   });
@@ -984,6 +1103,11 @@ function saveCatalogProduct(model) {
         productId,
         {
           itemId: clean_(model.itemId),
+          skipItemId: model.variants.some((variant) => {
+            return Boolean(
+                variant.glitterPotionColor ||
+                variant.glitterPotionSize);
+          }),
           chineseName: clean_(model.chineseName),
           storageLocation: clean_(model.storageLocation),
           inkSize: clean_(model.inkSize),
@@ -1383,6 +1507,8 @@ function appendSourceRow_(ss, model, variant) {
       'Ink Base Color',
       'Ink Glitter Color',
       'Ink Sheen Color',
+      'Glitter Potion Color',
+      'Glitter Potion Size',
       'Handle',
       'SKU',
       'Price',
@@ -1432,6 +1558,19 @@ function writeMappedRow_(
     overallResult,
     isNewSourceRow) {
   const index = getSheetIndex_(sheet);
+  const variantOptions = variant.optionValues || [];
+  const glitterPotionColor =
+    clean_(variant.glitterPotionColor) ||
+    clean_((variantOptions.find((option) => {
+      return normalize_(option.optionName) ===
+        'GLITTER POTION COLOR';
+    }) || {}).name);
+  const glitterPotionSize =
+    clean_(variant.glitterPotionSize) ||
+    clean_((variantOptions.find((option) => {
+      return normalize_(option.optionName) ===
+        'GLITTER POTION SIZE';
+    }) || {}).name);
   const values = {
     itemId:
       buildEditorItemId_(model.productType, variant.sku) ||
@@ -1451,6 +1590,8 @@ function writeMappedRow_(
     baseColors: normalizeEditorList_(model.baseColors).join(', '),
     glitterColors: normalizeEditorList_(model.glitterColors).join(', '),
     sheenColors: normalizeEditorList_(model.sheenColors).join(', '),
+    glitterPotionColor,
+    glitterPotionSize,
     descriptionHtml: clean_(model.descriptionHtml),
     tags: normalizeEditorTags_(model.tags).join(', '),
     sku: clean_(variant.sku),
@@ -1924,6 +2065,16 @@ function normalizeShopifyProduct_(product) {
                     name: option.value,
                   })),
 
+            glitterPotionColor:
+              getSelectedOptionValue_(
+                  variant,
+                  'Glitter Potion Color'),
+
+            glitterPotionSize:
+              getSelectedOptionValue_(
+                  variant,
+                  'Glitter Potion Size'),
+
             inventoryItemId:
               variant.inventoryItem &&
               variant.inventoryItem.id ||
@@ -1936,6 +2087,14 @@ function normalizeShopifyProduct_(product) {
             writeInventory: false,
           })),
   };
+}
+
+function getSelectedOptionValue_(variant, optionName) {
+  const match = (variant.selectedOptions || []).find((option) => {
+    return normalize_(option.name) === normalize_(optionName);
+  });
+
+  return match ? clean_(match.value) : '';
 }
 
 function createProduct_(model) {
@@ -2024,7 +2183,7 @@ function productInput_(model) {
   return input;
 }
 
-function saveVariant_(productId, variant, isNew) {
+function saveVariant_(accessToken, productId, variant, isNew) {
   const mutation = isNew ?
     `mutation AddVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
       productVariantsBulkCreate(productId: $productId, variants: $variants) {
@@ -2040,7 +2199,12 @@ function saveVariant_(productId, variant, isNew) {
   };
   if (variant.compareAtPrice) input.compareAtPrice = clean_(variant.compareAtPrice);
   input.barcode = clean_(variant.barcode) || null;
-  if (variant.optionValues && variant.optionValues.length) input.optionValues = variant.optionValues;
+  if (variant.optionValues && variant.optionValues.length) {
+    input.optionValues = resolveShopifyVariantOptionValues_(
+        accessToken,
+        productId,
+        variant.optionValues);
+  }
   if (!isNew) input.id = variant.id;
   const key = isNew ? 'productVariantsBulkCreate' : 'productVariantsBulkUpdate';
   const result = shopifyGraphql_(mutation, {productId, variants: [input]})[key];

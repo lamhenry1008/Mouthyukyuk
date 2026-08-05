@@ -509,7 +509,9 @@
     const itemTypeCodes = Object.freeze({
       'INK': 'INK',
       'FOUNTAIN PEN INK': 'INK',
-      'GLITTER POTION': 'INK',
+      'CALLIGRAPHY INK': 'INK',
+      'GLITTER POTION': 'GP',
+      'GP': 'GP',
       'FOUNTAIN PEN': 'PEN',
       'DIP PEN': 'PEN',
       'NOTEBOOK': 'NOTEBOOK',
@@ -843,6 +845,17 @@
           ${(model.variants || []).map(variantHtml).join('')}
         </div>
 
+        <datalist id="glitter-potion-color-options">
+          ${(editorOptions.glitterPotionColors || [])
+              .map((value) => `<option value="${esc(value)}"></option>`)
+              .join('')}
+        </datalist>
+        <datalist id="glitter-potion-size-options">
+          ${(editorOptions.glitterPotionSizes || [])
+              .map((value) => `<option value="${esc(value)}"></option>`)
+              .join('')}
+        </datalist>
+
         <button onclick="addVariant()">+ Add variant</button>
         ${
           errors.variants
@@ -982,6 +995,40 @@
               data-vkey="barcode"
               value="${esc(variant.barcode || '')}"
             >
+          </div>
+
+          <div class="field ${
+            errors[`variant_${index}_glitterPotionColor`] ? 'invalid' : ''
+          }">
+            <label>Glitter Potion Color</label>
+            <input
+              list="glitter-potion-color-options"
+              data-v="${index}"
+              data-vkey="glitterPotionColor"
+              value="${esc(variant.glitterPotionColor || '')}"
+            >
+            ${
+              errors[`variant_${index}_glitterPotionColor`]
+                ? `<div class="error">Required</div>`
+                : ''
+            }
+          </div>
+
+          <div class="field ${
+            errors[`variant_${index}_glitterPotionSize`] ? 'invalid' : ''
+          }">
+            <label>Glitter Potion Size</label>
+            <input
+              list="glitter-potion-size-options"
+              data-v="${index}"
+              data-vkey="glitterPotionSize"
+              value="${esc(variant.glitterPotionSize || '')}"
+            >
+            ${
+              errors[`variant_${index}_glitterPotionSize`]
+                ? `<div class="error">Required</div>`
+                : ''
+            }
           </div>
 
           <div>
@@ -1193,6 +1240,8 @@
         inventoryItemId: '',
         tracked: true,
         writeInventory: true,
+        glitterPotionColor: '',
+        glitterPotionSize: '',
         optionValues: [],
       });
 

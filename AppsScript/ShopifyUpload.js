@@ -44,7 +44,11 @@ const MYK_SHOPIFY = Object.freeze({
   apiVersion: '2026-07',
 
   reviewSheetName: 'Shopify Direct Sync Review',
-  syncProductStatus: 'ACTIVE',
+  allowedProductStatuses: Object.freeze([
+    'ACTIVE',
+    'DRAFT',
+    'ARCHIVED',
+  ]),
 
   // Set false while testing product fields without changing stock.
   inventoryWriteEnabled: true,
@@ -60,6 +64,8 @@ const MYK_SHOPIFY = Object.freeze({
   baseColorsMetafieldKey: 'ink_base_colors',
   glitterColorsMetafieldKey: 'ink_glitter_colors',
   sheenColorsMetafieldKey: 'ink_sheen_colors',
+  glitterPotionColorMetafieldKey: 'glitter_potion_color',
+  glitterPotionSizeMetafieldKey: 'glitter_potion_size',
   sourceSheetMetafieldKey: 'source_sheet',
   sourceRowMetafieldKey: 'source_row',
 
@@ -74,6 +80,7 @@ const MYK_SHOPIFY = Object.freeze({
     'Item ID',
     'Handle',
     'English Name',
+    'Collection',
     'Chinese Name',
     'Brand',
     'Product Type',
@@ -85,6 +92,8 @@ const MYK_SHOPIFY = Object.freeze({
     'Ink Base Colors',
     'Ink Glitter Colors',
     'Ink Sheen Colors',
+    'Glitter Potion Color',
+    'Glitter Potion Size',
     'Tags',
     'Body HTML',
     'Image URL',
@@ -194,6 +203,8 @@ const MYK_SHEET_PROFILES = Object.freeze({
         '中文名稱',
       ],
 
+      collection: ['Collection', '系列'],
+
       brand: [
         'Brand',
         '品牌',
@@ -257,8 +268,15 @@ const MYK_SHEET_PROFILES = Object.freeze({
         '產品類型',
       ],
 
+      status: [
+        'Status',
+        'Product Status',
+        '狀態',
+      ],
+
       imageUrl: [
         'Image URL',
+        'Image URLs',
         'Image Src',
         'Image',
       ],
@@ -281,6 +299,73 @@ const MYK_SHEET_PROFILES = Object.freeze({
         'Sheen Color',
       ],
 
+      taxonomyCategoryId: [
+        'Shopify Taxonomy ID',
+        'Taxonomy ID',
+        'Shopify Category ID',
+      ],
+    }),
+  }),
+
+  '閃粉': Object.freeze({
+    // Glitter Potion Item IDs use GP-<SKU>. Product Type can still be
+    // "Glitter Potion" in the source row and Shopify.
+    itemType: 'GP',
+    colorMode: 'GLITTER_POTION',
+    supportsSharedProductVariants: true,
+    defaultTaxonomyCategoryId: '',
+
+    aliases: Object.freeze({
+      englishName: [
+        'English Name',
+        'English',
+        'Product English Name',
+      ],
+      chineseName: [
+        'Chinese Name',
+        'Chinese',
+        '中文名稱',
+      ],
+      collection: ['Collection', '系列'],
+      brand: ['Brand', '品牌'],
+      brandShortName: [
+        'Brand Short Name',
+        'Brand Short',
+        'Brand Code',
+      ],
+      collectionShortName: [
+        'Item Collection Short Name',
+        'Collection Short Name',
+        'Collection Code',
+      ],
+      uniqueShortName: [
+        'Item Unique Short Name',
+        'Unique Short Name',
+        'Unique Code',
+      ],
+      sku: ['SKU', 'Variant SKU'],
+      price: ['Price', '售價'],
+      inventory: ['Inventory', '庫存'],
+      stock: ['Stock', '存貨'],
+      tags: ['Label Tag', 'Tags', 'Tag', '標籤'],
+      desc: [
+        'Desc',
+        'Description',
+        'Body HTML',
+        'Body (HTML)',
+      ],
+      productType: ['Product Type', 'Type', '產品類型'],
+      status: ['Status', 'Product Status', '狀態'],
+      imageUrl: ['Image URL', 'Image URLs', 'Image Src', 'Image'],
+      glitterPotionColor: [
+        'Glitter Potion Color',
+        'Glitter Color',
+      ],
+      glitterPotionSize: [
+        'Glitter Potion Size',
+        'Glitter Size',
+        'Size',
+      ],
       taxonomyCategoryId: [
         'Shopify Taxonomy ID',
         'Taxonomy ID',
@@ -376,6 +461,30 @@ function setupShopifyMetafields() {
       description: 'One or more sheen colors.',
     },
     {
+      name: 'Glitter Potion Color',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.glitterPotionColorMetafieldKey,
+      type: 'single_line_text_field',
+      ownerType: 'PRODUCT_VARIANT',
+      description: 'Glitter potion variant color.',
+    },
+    {
+      name: 'Variant Item ID',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.itemIdMetafieldKey,
+      type: 'single_line_text_field',
+      ownerType: 'PRODUCT_VARIANT',
+      description: 'Internal Mouthyukyuk variant identifier.',
+    },
+    {
+      name: 'Glitter Potion Size',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.glitterPotionSizeMetafieldKey,
+      type: 'single_line_text_field',
+      ownerType: 'PRODUCT_VARIANT',
+      description: 'Glitter potion variant size.',
+    },
+    {
       name: 'Source Sheet',
       namespace: MYK_SHOPIFY.metafieldNamespace,
       key: MYK_SHOPIFY.sourceSheetMetafieldKey,
@@ -409,7 +518,8 @@ function ensureShopifyMetafieldDefinition_(
   const existing = findShopifyMetafieldDefinition_(
       accessToken,
       definition.namespace,
-      definition.key);
+      definition.key,
+      definition.ownerType || 'PRODUCT');
 
   let definitionId;
 
@@ -439,7 +549,8 @@ function ensureShopifyMetafieldDefinition_(
 function findShopifyMetafieldDefinition_(
     accessToken,
     namespace,
-    key) {
+    key,
+    ownerType) {
   const query = `
     query FindMetafieldDefinition(
       $identifier: MetafieldDefinitionIdentifierInput!
@@ -464,7 +575,7 @@ function findShopifyMetafieldDefinition_(
         identifier: {
           namespace,
           key,
-          ownerType: 'PRODUCT',
+          ownerType: ownerType || 'PRODUCT',
         },
       });
 
@@ -509,7 +620,7 @@ function createShopifyMetafieldDefinition_(
     key: definition.key,
     description: definition.description,
     type: definition.type,
-    ownerType: 'PRODUCT',
+    ownerType: definition.ownerType || 'PRODUCT',
 
     /*
      * PUBLIC_READ permits use through Storefront API where applicable.
@@ -721,10 +832,11 @@ function buildReviewFromActiveSheet() {
       product.itemId,
       product.handle,
       product.englishName,
+      product.collection,
       product.chineseName,
       product.brand,
       product.productType,
-      'PENDING',
+      product.status,
       product.taxonomyCategoryId,
       product.sku,
       product.price,
@@ -732,6 +844,8 @@ function buildReviewFromActiveSheet() {
       product.baseColors.join(', '),
       product.glitterColors.join(', '),
       product.sheenColors.join(', '),
+      product.glitterPotionColor,
+      product.glitterPotionSize,
       product.tags.join(', '),
       product.bodyHtml,
       product.imageUrl,
@@ -780,6 +894,11 @@ function buildNormalizedProduct_(
       row,
       sourceIndices,
       profile.aliases.chineseName);
+
+  const collection = getAliasedValue_(
+      row,
+      sourceIndices,
+      profile.aliases.collection);
 
   const brand = getAliasedValue_(
       row,
@@ -854,6 +973,16 @@ function buildNormalizedProduct_(
           sourceIndices,
           profile.aliases.sheenColors));
 
+  const glitterPotionColor = getAliasedValue_(
+      row,
+      sourceIndices,
+      profile.aliases.glitterPotionColor);
+
+  const glitterPotionSize = getAliasedValue_(
+      row,
+      sourceIndices,
+      profile.aliases.glitterPotionSize);
+
   const tags = parseList_(
       getAliasedValue_(
           row,
@@ -871,6 +1000,12 @@ function buildNormalizedProduct_(
         sourceIndices,
         profile.aliases.productType) ||
     itemType;
+
+  const status = normalizeShopifyProductStatus_(
+      getAliasedValue_(
+          row,
+          sourceIndices,
+          profile.aliases.status));
 
   const existingTaxonomyCategoryId =
     normalizeTaxonomyCategoryId_(
@@ -891,10 +1026,12 @@ function buildNormalizedProduct_(
     itemId,
     handle: slugifyHandle_(englishName),
     englishName,
+    collection,
     chineseName,
     title: englishName || chineseName,
     brand,
     productType,
+    status,
     sku,
 
     price: parseMoney_(
@@ -907,16 +1044,96 @@ function buildNormalizedProduct_(
     baseColors,
     glitterColors,
     sheenColors,
+    glitterPotionColor,
+    glitterPotionSize,
+    variantOptionValues: [
+      glitterPotionColor
+        ? {
+          optionName: 'Glitter Potion Color',
+          name: glitterPotionColor,
+        }
+        : null,
+      glitterPotionSize
+        ? {
+          optionName: 'Glitter Potion Size',
+          name: glitterPotionSize,
+        }
+        : null,
+    ].filter(Boolean),
+    supportsSharedProductVariants:
+      profile.supportsSharedProductVariants === true,
     taxonomyCategoryId,
     colorMode: profile.colorMode || '',
     tags,
     bodyHtml: normalizeBodyHtml_(desc),
 
-    imageUrl: getAliasedValue_(
-        row,
-        sourceIndices,
-        profile.aliases.imageUrl),
+    imageUrl: normalizeReviewImageUrls_(
+        getAliasedValue_(
+            row,
+            sourceIndices,
+            profile.aliases.imageUrl)),
   };
+}
+
+/**
+ * Uses the same sheet format as Shopify Editor: one image URL per line, with
+ * Google Drive images written as https://drive.google.com/uc?id=<FILE_ID>.
+ */
+function normalizeReviewImageUrls_(value) {
+  const seen = new Set();
+
+  return clean_(value)
+      .split(/[\r\n;|]+/)
+      .map((url) => normalizeReviewImageUrl_(url))
+      .filter((url) => {
+        if (!url || seen.has(url)) {
+          return false;
+        }
+
+        seen.add(url);
+        return true;
+      })
+      .join('\n');
+}
+
+function normalizeReviewImageUrl_(value) {
+  const url = clean_(value);
+
+  if (!url) {
+    return '';
+  }
+
+  const isDriveUrl = /^https?:\/\/(?:www\.)?drive\.google\.com\//i
+      .test(url);
+
+  if (!isDriveUrl) {
+    // A bare Drive file ID is also accepted for compatibility with manually
+    // maintained source sheets. Other non-Drive URLs remain unchanged.
+    return /^[A-Za-z0-9_-]{20,}$/.test(url)
+      ? `https://drive.google.com/uc?id=${encodeURIComponent(url)}`
+      : url;
+  }
+
+  const pathMatch = url.match(/\/file\/d\/([^/?#]+)/i);
+  const queryMatch = url.match(/[?&]id=([^&#]+)/i);
+  let fileId = pathMatch
+    ? pathMatch[1]
+    : queryMatch
+      ? queryMatch[1]
+      : '';
+
+  try {
+    fileId = decodeURIComponent(fileId);
+  } catch (error) {
+    // Keep the captured value when a manually entered URL contains malformed
+    // percent encoding; validation below will reject an invalid file ID.
+  }
+
+  fileId = clean_(fileId);
+
+  return /^[A-Za-z0-9_-]+$/.test(fileId)
+    ? `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}`
+    : url;
 }
 
 /**
@@ -1331,6 +1548,10 @@ function validateNormalizedProduct_(product) {
     errors.push('MISSING_PRODUCT_TYPE');
   }
 
+  if (!isValidShopifyProductStatus_(product.status)) {
+    errors.push('MISSING_OR_INVALID_STATUS');
+  }
+
   if (
     product.colorMode === 'INK' &&
     product.baseColors.length === 0
@@ -1340,14 +1561,49 @@ function validateNormalizedProduct_(product) {
 
   if (
     product.colorMode === 'GLITTER_POTION' &&
-    product.glitterColors.length === 0
+    !product.glitterPotionColor
   ) {
-    errors.push('MISSING_GLITTER_COLOR');
+    errors.push('MISSING_GLITTER_POTION_COLOR');
+  }
+
+  if (
+    product.colorMode === 'GLITTER_POTION' &&
+    !product.glitterPotionSize
+  ) {
+    errors.push('MISSING_GLITTER_POTION_SIZE');
   }
 
   return errors.length
     ? `BLOCKED: ${errors.join(', ')}`
     : 'READY_FOR_SHOPIFY_CHECK';
+}
+
+function normalizeShopifyProductStatus_(value) {
+  return normalize_(value);
+}
+
+function isValidShopifyProductStatus_(value) {
+  return MYK_SHOPIFY.allowedProductStatuses.indexOf(
+      normalizeShopifyProductStatus_(value)) !== -1;
+}
+
+function createActionForStatus_(status) {
+  const normalizedStatus = normalizeShopifyProductStatus_(status);
+
+  if (!isValidShopifyProductStatus_(normalizedStatus)) {
+    throw new Error(
+        `Cannot create Shopify product with status: ${status || '(blank)'}.`);
+  }
+
+  return `CREATE_${normalizedStatus}`;
+}
+
+function isCreateProductAction_(action) {
+  return [
+    'CREATE_ACTIVE',
+    'CREATE_DRAFT',
+    'CREATE_ARCHIVED',
+  ].indexOf(normalize_(action)) !== -1;
 }
 
 function normalizeTaxonomyCategoryId_(value) {
@@ -1396,6 +1652,14 @@ function preflightReviewRows() {
     indices,
     'Handle');
 
+  const collectionIndex = requiredColumn_(
+      indices,
+      'Collection');
+
+  const statusIndex = requiredColumn_(
+      indices,
+      'Status');
+
   const validationIndex = requiredColumn_(
       indices,
       'Validation');
@@ -1433,6 +1697,34 @@ function preflightReviewRows() {
       'Shopify Result');
 
   const updates = [];
+  const plannedVariantHandles = {};
+  const variantHandleCollections = {};
+  const variantHandleStatuses = {};
+
+  values.slice(1).forEach((candidate) => {
+    const candidateSheet = clean_(candidate[sourceSheetIndex]);
+    const candidateProfile = MYK_SHEET_PROFILES[candidateSheet] || {};
+
+    if (candidateProfile.supportsSharedProductVariants !== true) {
+      return;
+    }
+
+    const handleKey = slugifyHandle_(candidate[handleIndex]);
+
+    if (!handleKey) {
+      return;
+    }
+
+    if (!variantHandleCollections[handleKey]) {
+      variantHandleCollections[handleKey] = new Set();
+      variantHandleStatuses[handleKey] = new Set();
+    }
+
+    variantHandleCollections[handleKey].add(
+        normalize_(candidate[collectionIndex]));
+    variantHandleStatuses[handleKey].add(
+        normalizeShopifyProductStatus_(candidate[statusIndex]));
+  });
 
   for (let offset = 1; offset < values.length; offset += 1) {
     const row = values[offset];
@@ -1445,6 +1737,10 @@ function preflightReviewRows() {
 
     const sourceSheetName = clean_(row[sourceSheetIndex]);
     const sourceRow = Number(row[sourceRowIndex]);
+    const sourceProfile =
+      MYK_SHEET_PROFILES[sourceSheetName] || {};
+    const supportsSharedProductVariants =
+      sourceProfile.supportsSharedProductVariants === true;
 
     if (
       normalize_(row[validationIndex]) !==
@@ -1471,15 +1767,97 @@ function preflightReviewRows() {
       continue;
     }
 
+    const rowHandleKey = slugifyHandle_(row[handleIndex]);
+
+    if (
+      supportsSharedProductVariants &&
+      variantHandleCollections[rowHandleKey] &&
+      variantHandleCollections[rowHandleKey].size > 1
+    ) {
+      action = 'BLOCKED';
+      result =
+        'BLOCKED: SAME_HANDLE_HAS_DIFFERENT_COLLECTION_NAMES';
+
+      writeSourceUploadResult_(
+          spreadsheet,
+          sourceSheetName,
+          sourceRow,
+          result,
+          false);
+
+      updates.push([
+        action,
+        productGid,
+        variantGid,
+        inventoryItemGid,
+        result,
+      ]);
+      continue;
+    }
+
+    if (
+      supportsSharedProductVariants &&
+      variantHandleStatuses[rowHandleKey] &&
+      variantHandleStatuses[rowHandleKey].size > 1
+    ) {
+      action = 'BLOCKED';
+      result =
+        'BLOCKED: SAME_PRODUCT_VARIANTS_HAVE_DIFFERENT_STATUSES';
+
+      writeSourceUploadResult_(
+          spreadsheet,
+          sourceSheetName,
+          sourceRow,
+          result,
+          false);
+
+      updates.push([
+        action,
+        productGid,
+        variantGid,
+        inventoryItemGid,
+        result,
+      ]);
+      continue;
+    }
+
     try {
       const resolution =
         resolveShopifyProductIdentity_(
             accessToken,
             clean_(row[skuIndex]),
-            clean_(row[handleIndex]));
+            clean_(row[handleIndex]),
+            supportsSharedProductVariants);
 
       action = resolution.action;
       result = resolution.message;
+
+      if (action === 'CREATE_ACTIVE') {
+        action = createActionForStatus_(row[statusIndex]);
+        result = `READY_TO_${action}`;
+      }
+
+      const normalizedHandle = slugifyHandle_(
+          clean_(row[handleIndex]));
+      const plannedGroupKey = [
+        normalizedHandle,
+        normalize_(row[collectionIndex]),
+      ].join('|');
+
+      // If several new source rows share one glitter-potion handle, only the
+      // first row creates the product. Later rows create variants on it.
+      if (
+        supportsSharedProductVariants &&
+        isCreateProductAction_(action)
+      ) {
+        if (plannedVariantHandles[plannedGroupKey]) {
+          action = 'CREATE_VARIANT';
+          result =
+            'READY_TO_CREATE_VARIANT_AFTER_PRODUCT';
+        } else {
+          plannedVariantHandles[plannedGroupKey] = true;
+        }
+      }
 
       if (resolution.identity) {
         productGid =
@@ -1562,7 +1940,9 @@ function preflightReviewRows() {
 
   SpreadsheetApp.getUi().alert(
       'Shopify preflight finished.\n\n' +
-      'CREATE_ACTIVE: no matching SKU or handle exists.\n' +
+      'CREATE_ACTIVE / CREATE_DRAFT / CREATE_ARCHIVED: ' +
+      'create using the source-sheet status.\n' +
+      'CREATE_VARIANT: add a new variant to a shared product handle.\n' +
       'UPDATE_EXISTING: one exact matching SKU exists.\n' +
       'BLOCKED: multiple exact SKU matches or local validation failed.\n' +
       'CHECK_FAILED: Shopify lookup failed.\n\n' +
@@ -1587,7 +1967,8 @@ function preflightReviewRows() {
 function resolveShopifyProductIdentity_(
     accessToken,
     sku,
-    handle) {
+    handle,
+    allowNewVariant) {
   const normalizedSku = normalizeSku_(sku);
   const normalizedHandle = slugifyHandle_(handle);
 
@@ -1738,6 +2119,24 @@ function resolveShopifyProductIdentity_(
       ? handleProduct.variants.nodes
       : [];
 
+  if (allowNewVariant === true) {
+    return {
+      action: 'CREATE_VARIANT',
+      identity: {
+        productId: handleProduct.id,
+        variantId: '',
+        inventoryItemId: '',
+        title: handleProduct.title,
+        handle: handleProduct.handle,
+        status: handleProduct.status,
+        matchedBy: 'HANDLE_FOR_NEW_VARIANT',
+      },
+      message:
+        `READY_TO_CREATE_VARIANT: ` +
+        `${handleProduct.title} (${handleProduct.handle})`,
+    };
+  }
+
   /*
    * A handle identifies a product, but we still need an unambiguous variant
    * to update its SKU and price.
@@ -1820,6 +2219,10 @@ function getApprovalCandidates() {
       indices,
       'Upload Action');
 
+  const statusIndex = requiredColumn_(
+      indices,
+      'Status');
+
   const sourceRowIndex = requiredColumn_(
       indices,
       'Source Row');
@@ -1844,6 +2247,14 @@ function getApprovalCandidates() {
       indices,
       'Inventory');
 
+  const glitterPotionColorIndex = requiredColumn_(
+      indices,
+      'Glitter Potion Color');
+
+  const glitterPotionSizeIndex = requiredColumn_(
+      indices,
+      'Glitter Potion Size');
+
   const resultIndex = requiredColumn_(
       indices,
       'Shopify Result');
@@ -1858,8 +2269,11 @@ function getApprovalCandidates() {
         sku: row[skuIndex],
         price: row[priceIndex],
         inventory: row[inventoryIndex],
+        glitterPotionColor: row[glitterPotionColorIndex],
+        glitterPotionSize: row[glitterPotionSizeIndex],
         validation: row[validationIndex],
         action: row[actionIndex],
+        status: row[statusIndex],
         result: row[resultIndex],
 
         approved:
@@ -1869,8 +2283,8 @@ function getApprovalCandidates() {
           normalize_(row[validationIndex]) ===
             'READY_FOR_SHOPIFY_CHECK' &&
           (
-            normalize_(row[actionIndex]) === 'CREATE_ACTIVE' ||
-            normalize_(row[actionIndex]) === 'CREATE_DRAFT' ||
+            isCreateProductAction_(row[actionIndex]) ||
+            normalize_(row[actionIndex]) === 'CREATE_VARIANT' ||
             normalize_(row[actionIndex]) === 'UPDATE_EXISTING'
           ),
       }));
@@ -1922,8 +2336,8 @@ function approveSelectedReviewRows(sheetRows) {
     const action = normalize_(row[actionIndex]);
 
     const shopifyValid =
-      action === 'CREATE_ACTIVE' ||
-      action === 'CREATE_DRAFT' ||
+      isCreateProductAction_(action) ||
+      action === 'CREATE_VARIANT' ||
       action === 'UPDATE_EXISTING';
 
     const approval =
@@ -2314,9 +2728,6 @@ function processApprovedUploadBatch_() {
     const resultIndex =
       requiredColumn_(indices, 'Shopify Result');
 
-    const statusIndex =
-      requiredColumn_(indices, 'Status');
-
     let nextRow = Number(
         properties.getProperty(
             MYK_UPLOAD_JOB.nextRowProperty) || 2);
@@ -2377,12 +2788,6 @@ function processApprovedUploadBatch_() {
             sheetRow,
             approvalIndex,
             'UPLOAD_FAILED');
-
-        writeCell_(
-            reviewSheet,
-            sheetRow,
-            statusIndex,
-            'FAILED');
 
         writeCell_(
             reviewSheet,
@@ -2490,6 +2895,16 @@ function processOneApprovedReviewRow_(
         indices,
         'Ink Sheen Colors');
 
+  const glitterPotionColorIndex =
+    requiredColumn_(
+        indices,
+        'Glitter Potion Color');
+
+  const glitterPotionSizeIndex =
+    requiredColumn_(
+        indices,
+        'Glitter Potion Size');
+
   const tagsIndex =
     requiredColumn_(indices, 'Tags');
 
@@ -2528,9 +2943,34 @@ function processOneApprovedReviewRow_(
         'Uploaded At');
 
   const action = normalize_(row[actionIndex]);
-  const isCreateAction =
-    action === 'CREATE_ACTIVE' ||
-    action === 'CREATE_DRAFT';
+  const desiredStatus = normalizeShopifyProductStatus_(
+      row[statusIndex]);
+
+  if (!isValidShopifyProductStatus_(desiredStatus)) {
+    throw new Error(
+        `Review row has an invalid Shopify status: ` +
+        `${row[statusIndex] || '(blank)'}.`);
+  }
+
+  const isCreateAction = isCreateProductAction_(action);
+  const glitterPotionColor = clean_(
+      row[glitterPotionColorIndex]);
+  const glitterPotionSize = clean_(
+      row[glitterPotionSizeIndex]);
+  const variantOptionValues = [
+    glitterPotionColor
+      ? {
+        optionName: 'Glitter Potion Color',
+        name: glitterPotionColor,
+      }
+      : null,
+    glitterPotionSize
+      ? {
+        optionName: 'Glitter Potion Size',
+        name: glitterPotionSize,
+      }
+      : null,
+  ].filter(Boolean);
 
   writeCell_(
       reviewSheet,
@@ -2538,18 +2978,12 @@ function processOneApprovedReviewRow_(
       approvalIndex,
       'PROCESSING');
 
-  writeCell_(
-      reviewSheet,
-      sheetRow,
-      statusIndex,
-      'PROCESSING');
-
   const productInput = {
     handle: clean_(row[handleIndex]),
     title: clean_(row[englishNameIndex]),
     vendor: clean_(row[brandIndex]),
     productType: clean_(row[typeIndex]),
-    status: MYK_SHOPIFY.syncProductStatus,
+    status: desiredStatus,
     descriptionHtml: clean_(row[bodyIndex]),
     tags: parseList_(row[tagsIndex]),
   };
@@ -2570,19 +3004,101 @@ function processOneApprovedReviewRow_(
         taxonomy);
   }
 
+  const productCreateInput = Object.assign({}, productInput);
+
+  if (variantOptionValues.length > 0) {
+    productCreateInput.productOptions =
+      variantOptionValues.map((option) => ({
+        name: option.optionName,
+        values: [{name: option.name}],
+      }));
+  }
+
   let identity = {
     productId: clean_(row[productGidIndex]),
     variantId: clean_(row[variantGidIndex]),
     inventoryItemId:
       clean_(row[inventoryItemGidIndex]),
   };
+  let effectiveAction = action;
+  const sourceProfile =
+    MYK_SHEET_PROFILES[clean_(row[sourceSheetIndex])] || {};
 
+  // Re-resolve planned creates at execution time. This is important when a
+  // previous approved row created the shared product after preflight, or when
+  // only a later variant row was approved.
   if (
+    isCreateAction &&
+    sourceProfile.supportsSharedProductVariants === true &&
+    !identity.variantId
+  ) {
+    const currentResolution =
+      resolveShopifyProductIdentity_(
+          accessToken,
+          clean_(row[skuIndex]),
+          clean_(row[handleIndex]),
+          true);
+
+    if (currentResolution.action === 'UPDATE_EXISTING') {
+      effectiveAction = 'UPDATE_EXISTING';
+      identity = Object.assign(
+          identity,
+          currentResolution.identity || {});
+    } else if (currentResolution.action === 'CREATE_VARIANT') {
+      effectiveAction = 'CREATE_VARIANT';
+      identity.productId =
+        currentResolution.identity.productId;
+    }
+  }
+
+  if (effectiveAction === 'CREATE_VARIANT') {
+    if (!identity.productId) {
+      const currentResolution =
+        resolveShopifyProductIdentity_(
+            accessToken,
+            clean_(row[skuIndex]),
+            clean_(row[handleIndex]),
+            true);
+
+      if (currentResolution.identity) {
+        identity.productId =
+          currentResolution.identity.productId;
+      }
+    }
+
+    if (!identity.productId) {
+      // The planned first row may not have been approved. In that case this
+      // row safely becomes the product's initial variant.
+      identity = createShopifyProduct_(
+          accessToken,
+          productCreateInput);
+      effectiveAction = createActionForStatus_(desiredStatus);
+    } else {
+      updateShopifyProduct_(
+          accessToken,
+          identity.productId,
+          productInput);
+
+      ensureShopifyProductOptions_(
+          accessToken,
+          identity.productId,
+          variantOptionValues);
+
+      identity = Object.assign(
+          identity,
+          createShopifyVariant_(
+              accessToken,
+              identity.productId,
+              clean_(row[skuIndex]),
+              fixedPrice_(row[priceIndex]),
+              variantOptionValues));
+    }
+  } else if (
     isCreateAction &&
     identity.productId
   ) {
-    // A previous attempt already created the product. Complete its product
-    // fields and ACTIVE status instead of creating a duplicate.
+    // A previous attempt already created the product. Complete its fields and
+    // apply the reviewed source status instead of creating a duplicate.
     updateShopifyProduct_(
         accessToken,
         identity.productId,
@@ -2591,7 +3107,7 @@ function processOneApprovedReviewRow_(
 
     identity = createShopifyProduct_(
         accessToken,
-        productInput);
+        productCreateInput);
 
     writeCell_(
         reviewSheet,
@@ -2610,7 +3126,7 @@ function processOneApprovedReviewRow_(
         sheetRow,
         inventoryItemGidIndex,
         identity.inventoryItemId);
-  } else if (action === 'UPDATE_EXISTING') {
+  } else if (effectiveAction === 'UPDATE_EXISTING') {
     if (
       !identity.productId ||
       !identity.variantId
@@ -2628,6 +3144,16 @@ function processOneApprovedReviewRow_(
         `Row action is not uploadable: ${action}`);
   }
 
+  if (
+    effectiveAction === 'UPDATE_EXISTING' &&
+    variantOptionValues.length > 0
+  ) {
+    ensureShopifyProductOptions_(
+        accessToken,
+        identity.productId,
+        variantOptionValues);
+  }
+
   // Continue with your existing updateShopifyVariant_,
   // setShopifyProductMetafields_ and inventory code here.
 
@@ -2636,7 +3162,8 @@ function processOneApprovedReviewRow_(
       identity.productId,
       identity.variantId,
       clean_(row[skuIndex]),
-      fixedPrice_(row[priceIndex]));
+      fixedPrice_(row[priceIndex]),
+      variantOptionValues);
 
   identity.variantId =
     variantResult.variantId;
@@ -2650,6 +3177,7 @@ function processOneApprovedReviewRow_(
       identity.productId,
       {
         itemId: clean_(row[itemIdIndex]),
+        skipItemId: variantOptionValues.length > 0,
         baseColors:
           parseList_(row[baseColorsIndex]),
         glitterColors:
@@ -2662,6 +3190,17 @@ function processOneApprovedReviewRow_(
           clean_(row[sourceRowIndex]),
       });
 
+  if (variantOptionValues.length > 0) {
+    setShopifyVariantMetafields_(
+        accessToken,
+        identity.variantId,
+        {
+          itemId: clean_(row[itemIdIndex]),
+          glitterPotionColor,
+          glitterPotionSize,
+        });
+  }
+
   const verifiedMetafields =
   verifyProductMetafields_(
       accessToken,
@@ -2672,12 +3211,18 @@ function processOneApprovedReviewRow_(
         return metafield.key;
       }));
 
-  [
-    MYK_SHOPIFY.itemIdMetafieldKey,
+  const requiredProductMetafieldKeys = [
     MYK_SHOPIFY.baseColorsMetafieldKey,
     MYK_SHOPIFY.glitterColorsMetafieldKey,
     MYK_SHOPIFY.sheenColorsMetafieldKey,
-  ].forEach((key) => {
+  ];
+
+  if (variantOptionValues.length === 0) {
+    requiredProductMetafieldKeys.unshift(
+        MYK_SHOPIFY.itemIdMetafieldKey);
+  }
+
+  requiredProductMetafieldKeys.forEach((key) => {
     if (!verifiedKeys.has(key)) {
       throw new Error(
           `Metafield verification failed: ${key} not found.`);
@@ -2700,12 +3245,14 @@ function processOneApprovedReviewRow_(
       `INVENTORY_VERIFIED=${inventoryResult.quantity}`;
   }
 
-  const productResult = isCreateAction
-    ? 'CREATED_ACTIVE'
-    : 'UPDATED_ACTIVE';
+  const productResult = isCreateProductAction_(effectiveAction)
+    ? `CREATED_${desiredStatus}`
+    : effectiveAction === 'CREATE_VARIANT'
+      ? `CREATED_VARIANT_${desiredStatus}`
+      : `UPDATED_${desiredStatus}`;
 
   const finalResult =
-    `${productResult}; STATUS=ACTIVE; ${inventoryResultText}`;
+    `${productResult}; STATUS=${desiredStatus}; ${inventoryResultText}`;
 
   writeCell_(
       reviewSheet,
@@ -2735,7 +3282,7 @@ function processOneApprovedReviewRow_(
       reviewSheet,
       sheetRow,
       statusIndex,
-      MYK_SHOPIFY.syncProductStatus);
+      desiredStatus);
 
   writeCell_(
       reviewSheet,
@@ -2755,18 +3302,23 @@ function processOneApprovedReviewRow_(
       Number(row[sourceRowIndex]),
       identity);
 
+  writeSourceItemId_(
+      spreadsheet,
+      clean_(row[sourceSheetIndex]),
+      Number(row[sourceRowIndex]),
+      clean_(row[itemIdIndex]));
+
   writeSourceUploadResult_(
       spreadsheet,
       clean_(row[sourceSheetIndex]),
       Number(row[sourceRowIndex]),
       finalResult,
       true,
-      taxonomy);
+      taxonomy,
+      desiredStatus);
 }
 
-/**
- * Creates one ACTIVE Shopify product after review approval.
- */
+/** Creates one Shopify product with the reviewed source status. */
 function createShopifyProduct_(accessToken, productInput) {
   const mutation = `
     mutation CreateProduct($product: ProductCreateInput!) {
@@ -2828,10 +3380,13 @@ function createShopifyProduct_(accessToken, productInput) {
         'Shopify did not return the created product identity.');
   }
 
-  if (normalize_(product.status) !== MYK_SHOPIFY.syncProductStatus) {
+  const expectedStatus = normalizeShopifyProductStatus_(
+      productInput.status);
+
+  if (normalize_(product.status) !== expectedStatus) {
     throw new Error(
         `Shopify created the product with status ${product.status}; ` +
-        `expected ${MYK_SHOPIFY.syncProductStatus}.`);
+        `expected ${expectedStatus}.`);
   }
 
   return {
@@ -2849,7 +3404,7 @@ function createShopifyProduct_(accessToken, productInput) {
 /**
  * Updates product-level fields.
  *
- * Existing approved products are explicitly moved to ACTIVE.
+ * Existing products are moved to the status selected in the source sheet.
  */
 function updateShopifyProduct_(
     accessToken,
@@ -2894,13 +3449,279 @@ function updateShopifyProduct_(
       result.userErrors,
       'productUpdate failed');
 
+  const expectedStatus = normalizeShopifyProductStatus_(
+      productInput.status);
+
   if (
     !result.product ||
-    normalize_(result.product.status) !== MYK_SHOPIFY.syncProductStatus
+    normalize_(result.product.status) !== expectedStatus
   ) {
     throw new Error(
-        `Shopify did not confirm status ${MYK_SHOPIFY.syncProductStatus}.`);
+        `Shopify did not confirm status ${expectedStatus}.`);
   }
+}
+
+/**
+ * Ensures an existing shared product has the option names required by a new
+ * glitter-potion variant. Existing variants are left in place.
+ */
+function ensureShopifyProductOptions_(
+    accessToken,
+    productId,
+    optionValues) {
+  if (!Array.isArray(optionValues) || optionValues.length === 0) {
+    return [];
+  }
+
+  let productOptions = getShopifyProductOptions_(
+      accessToken,
+      productId);
+
+  const existingNames = new Set(
+      productOptions.map((option) => {
+        return normalize_(option.name);
+      }));
+  const missing = optionValues.filter((option) => {
+    return !existingNames.has(normalize_(option.optionName));
+  });
+
+  if (missing.length === 0) {
+    return productOptions;
+  }
+
+  const mutation = `
+    mutation CreateProductOptions(
+      $productId: ID!,
+      $options: [OptionCreateInput!]!
+    ) {
+      productOptionsCreate(
+        productId: $productId,
+        options: $options,
+        variantStrategy: LEAVE_AS_IS
+      ) {
+        product {
+          id
+          options {
+            name
+          }
+        }
+        userErrors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `;
+  const payload = callShopifyGraphql_(
+      accessToken,
+      mutation,
+      {
+        productId,
+        options: missing.map((option) => ({
+          name: option.optionName,
+          values: [{name: option.name}],
+        })),
+      });
+  const result = payload.data && payload.data.productOptionsCreate;
+
+  if (!result) {
+    throw new Error(
+        'Shopify returned no productOptionsCreate payload.');
+  }
+
+  throwOnUserErrors_(
+      result.userErrors,
+      'productOptionsCreate failed');
+
+  // Fetch again so callers receive the permanent ProductOption and
+  // ProductOptionValue GIDs created by Shopify.
+  productOptions = getShopifyProductOptions_(
+      accessToken,
+      productId);
+
+  return productOptions;
+}
+
+/**
+ * Returns the permanent Shopify IDs for every option and option value on a
+ * product. These IDs let later variants reuse an existing value instead of
+ * attempting to create a second value with the same name.
+ */
+function getShopifyProductOptions_(accessToken, productId) {
+  const query = `
+    query ProductOptions($id: ID!) {
+      product(id: $id) {
+        id
+        options {
+          id
+          name
+          optionValues {
+            id
+            name
+          }
+        }
+      }
+    }
+  `;
+  const payload = callShopifyGraphql_(
+      accessToken,
+      query,
+      {id: productId});
+  const product = payload.data && payload.data.product;
+
+  if (!product) {
+    throw new Error(
+        'Cannot read variant options: Shopify product was not found.');
+  }
+
+  return Array.isArray(product.options)
+    ? product.options
+    : [];
+}
+
+/**
+ * Converts editor/review values such as
+ *   {optionName: 'Glitter Potion Color', name: 'Red Glitter'}
+ * into Shopify identities.
+ *
+ * An existing same-name value is sent back by its original GID. A genuinely
+ * new value is linked to the existing option by optionId and its new name.
+ */
+function resolveShopifyVariantOptionValues_(
+    accessToken,
+    productId,
+    requestedOptionValues) {
+  if (
+    !Array.isArray(requestedOptionValues) ||
+    requestedOptionValues.length === 0
+  ) {
+    return [];
+  }
+
+  const cleanRequests = requestedOptionValues
+      .map((option) => ({
+        optionName: clean_(option.optionName),
+        name: clean_(option.name),
+      }))
+      .filter((option) => option.optionName && option.name);
+
+  if (cleanRequests.length !== requestedOptionValues.length) {
+    throw new Error(
+        'Every variant option must contain both an option name and a value.');
+  }
+
+  const productOptions = ensureShopifyProductOptions_(
+      accessToken,
+      productId,
+      cleanRequests);
+
+  return cleanRequests.map((requested) => {
+    const productOption = productOptions.find((option) => {
+      return normalize_(option.name) === normalize_(requested.optionName);
+    });
+
+    if (!productOption || !productOption.id) {
+      throw new Error(
+          `Shopify option was not found after setup: ${requested.optionName}.`);
+    }
+
+    const originalValue = (productOption.optionValues || [])
+        .find((optionValue) => {
+          return normalize_(optionValue.name) === normalize_(requested.name);
+        });
+
+    if (originalValue && originalValue.id) {
+      return {
+        id: originalValue.id,
+        optionId: productOption.id,
+      };
+    }
+
+    return {
+      optionId: productOption.id,
+      name: requested.name,
+    };
+  });
+}
+
+/** Creates one new variant on an existing Shopify product. */
+function createShopifyVariant_(
+    accessToken,
+    productId,
+    sku,
+    price,
+    optionValues) {
+  const mutation = `
+    mutation CreateVariant(
+      $productId: ID!,
+      $variants: [ProductVariantsBulkInput!]!
+    ) {
+      productVariantsBulkCreate(
+        productId: $productId,
+        variants: $variants
+      ) {
+        productVariants {
+          id
+          price
+          inventoryItem {
+            id
+            sku
+            tracked
+          }
+        }
+        userErrors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `;
+  const input = {
+    price: fixedPrice_(price),
+    inventoryItem: {
+      sku: normalizeSku_(sku),
+      tracked: true,
+    },
+  };
+
+  if (Array.isArray(optionValues) && optionValues.length > 0) {
+    input.optionValues = resolveShopifyVariantOptionValues_(
+        accessToken,
+        productId,
+        optionValues);
+  }
+
+  const payload = callShopifyGraphql_(
+      accessToken,
+      mutation,
+      {
+        productId,
+        variants: [input],
+      });
+  const result = payload.data && payload.data.productVariantsBulkCreate;
+
+  if (!result) {
+    throw new Error(
+        'Shopify returned no productVariantsBulkCreate payload.');
+  }
+
+  throwOnUserErrors_(
+      result.userErrors,
+      'productVariantsBulkCreate failed');
+
+  const variant = result.productVariants && result.productVariants[0];
+
+  if (!variant || !variant.inventoryItem || !variant.inventoryItem.id) {
+    throw new Error(
+        'Shopify did not return the created variant identity.');
+  }
+
+  return {
+    variantId: variant.id,
+    inventoryItemId: variant.inventoryItem.id,
+  };
 }
 
 /**
@@ -2915,7 +3736,8 @@ function updateShopifyVariant_(
     productId,
     variantId,
     sku,
-    price) {
+    price,
+    optionValues) {
   const normalizedSku = normalizeSku_(sku);
   const normalizedPrice = fixedPrice_(price);
 
@@ -2963,21 +3785,28 @@ function updateShopifyVariant_(
     }
   `;
 
+  const variantInput = {
+    id: variantId,
+    price: normalizedPrice,
+    inventoryItem: {
+      sku: normalizedSku,
+      tracked: true,
+    },
+  };
+
+  if (Array.isArray(optionValues) && optionValues.length > 0) {
+    variantInput.optionValues = resolveShopifyVariantOptionValues_(
+        accessToken,
+        productId,
+        optionValues);
+  }
+
   const payload = callShopifyGraphql_(
       accessToken,
       mutation,
       {
         productId,
-        variants: [
-          {
-            id: variantId,
-            price: normalizedPrice,
-            inventoryItem: {
-              sku: normalizedSku,
-              tracked: true,
-            },
-          },
-        ],
+        variants: [variantInput],
       });
 
   const result =
@@ -3061,13 +3890,6 @@ function setShopifyProductMetafields_(
     {
       ownerId: productId,
       namespace: MYK_SHOPIFY.metafieldNamespace,
-      key: MYK_SHOPIFY.itemIdMetafieldKey,
-      type: 'single_line_text_field',
-      value: data.itemId,
-    },
-    {
-      ownerId: productId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
       key: MYK_SHOPIFY.baseColorsMetafieldKey,
       type: 'list.single_line_text_field',
       value: JSON.stringify(data.baseColors),
@@ -3087,6 +3909,16 @@ function setShopifyProductMetafields_(
       value: JSON.stringify(data.sheenColors),
     },
   ];
+
+  if (data.skipItemId !== true) {
+    metafields.unshift({
+      ownerId: productId,
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.itemIdMetafieldKey,
+      type: 'single_line_text_field',
+      value: data.itemId,
+    });
+  }
 
   [
     {
@@ -3154,6 +3986,68 @@ function setShopifyProductMetafields_(
   throwOnUserErrors_(
       result.userErrors,
       'metafieldsSet failed');
+}
+
+/** Stores glitter-potion attributes on the exact Shopify variant. */
+function setShopifyVariantMetafields_(
+    accessToken,
+    variantId,
+    data) {
+  const mutation = `
+    mutation SetVariantMetafields(
+      $metafields: [MetafieldsSetInput!]!
+    ) {
+      metafieldsSet(metafields: $metafields) {
+        metafields {
+          id
+          key
+          value
+        }
+        userErrors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `;
+  const metafields = [
+    {
+      ownerId: variantId,
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.itemIdMetafieldKey,
+      type: 'single_line_text_field',
+      value: clean_(data.itemId),
+    },
+    {
+      ownerId: variantId,
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.glitterPotionColorMetafieldKey,
+      type: 'single_line_text_field',
+      value: clean_(data.glitterPotionColor),
+    },
+    {
+      ownerId: variantId,
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.glitterPotionSizeMetafieldKey,
+      type: 'single_line_text_field',
+      value: clean_(data.glitterPotionSize),
+    },
+  ];
+  const payload = callShopifyGraphql_(
+      accessToken,
+      mutation,
+      {metafields});
+  const result = payload.data && payload.data.metafieldsSet;
+
+  if (!result) {
+    throw new Error(
+        'Shopify returned no variant metafieldsSet payload.');
+  }
+
+  throwOnUserErrors_(
+      result.userErrors,
+      'variant metafieldsSet failed');
 }
 
 /**
@@ -3769,9 +4663,12 @@ function buildApprovalDialogHtml_() {
         <tr>
           <th>Select</th>
           <th>Action</th>
+          <th>Status</th>
           <th>Item ID</th>
           <th>English name</th>
           <th>SKU</th>
+          <th>Potion color</th>
+          <th>Potion size</th>
           <th>Price</th>
           <th>Inventory</th>
           <th>Result</th>
@@ -3807,9 +4704,12 @@ function buildApprovalDialogHtml_() {
           row.approved ? 'checked ' : '',
           '></td>',
           '<td>' + escapeHtml(row.action) + '</td>',
+          '<td>' + escapeHtml(row.status) + '</td>',
           '<td>' + escapeHtml(row.itemId) + '</td>',
           '<td>' + escapeHtml(row.title) + '</td>',
           '<td>' + escapeHtml(row.sku) + '</td>',
+          '<td>' + escapeHtml(row.glitterPotionColor) + '</td>',
+          '<td>' + escapeHtml(row.glitterPotionSize) + '</td>',
           '<td>' + escapeHtml(row.price) + '</td>',
           '<td>' + escapeHtml(row.inventory) + '</td>',
           '<td class="result">' + escapeHtml(row.result) + '</td>',
@@ -3944,6 +4844,7 @@ function writeReviewSheet_(spreadsheet, rows) {
     'Item ID': 145,
     'Handle': 150,
     'English Name': 180,
+    'Collection': 160,
     'Chinese Name': 140,
     'Brand': 100,
     'Product Type': 110,
@@ -3955,6 +4856,8 @@ function writeReviewSheet_(spreadsheet, rows) {
     'Ink Base Colors': 120,
     'Ink Glitter Colors': 120,
     'Ink Sheen Colors': 120,
+    'Glitter Potion Color': 130,
+    'Glitter Potion Size': 110,
     'Tags': 150,
     'Body HTML': 180,
     'Image URL': 160,
@@ -4186,6 +5089,68 @@ function writeSourceShopifyIdentity_(
         .getRange(rowNumber, columns.inventoryItemGid + 1)
         .setValue(clean_(identity.inventoryItemId));
   }
+}
+
+/**
+ * Returns the source column that stores the internal Item ID. Existing source
+ * sheets normally call this column "ID"; newer sheets may call it "Item ID".
+ * A new Item ID column is added only when neither heading exists.
+ */
+function ensureSourceItemIdColumn_(sheet) {
+  let indices = getColumnIndices(sheet);
+  const aliases = ['ID', 'Item ID'];
+
+  for (let index = 0; index < aliases.length; index += 1) {
+    const position = indices[formatHeaderKey_(aliases[index])];
+
+    if (position !== undefined) {
+      return position;
+    }
+  }
+
+  const column = sheet.getLastColumn() + 1;
+  sheet
+      .getRange(1, column)
+      .setValue('Item ID')
+      .setFontWeight('bold');
+
+  indices = getColumnIndices(sheet);
+  return requiredColumn_(indices, 'Item ID');
+}
+
+/** Writes the reviewed Item ID back to the exact original source row. */
+function writeSourceItemId_(
+    spreadsheet,
+    sourceSheetName,
+    sourceRow,
+    itemId) {
+  const normalizedItemId = clean_(itemId);
+
+  if (!normalizedItemId) {
+    throw new Error(
+        'Cannot write source Item ID: the reviewed Item ID is empty.');
+  }
+
+  if (!sourceSheetName) {
+    throw new Error(
+        'Cannot write source Item ID: source sheet name is missing.');
+  }
+
+  const rowNumber = Number(sourceRow);
+
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    throw new Error(
+        `Cannot write source Item ID: invalid source row ${sourceRow}.`);
+  }
+
+  const sheet = requireSheet_(
+      spreadsheet,
+      sourceSheetName);
+  const itemIdColumn = ensureSourceItemIdColumn_(sheet);
+
+  sheet
+      .getRange(rowNumber, itemIdColumn + 1)
+      .setValue(normalizedItemId);
 }
 
 function requireSheetProfile_(sheetName) {
@@ -4458,7 +5423,8 @@ function writeSourceUploadResult_(
     sourceRow,
     result,
     wasSuccessful,
-    taxonomyCategoryId) {
+    taxonomyCategoryId,
+    productStatus) {
   if (!sourceSheetName) {
     throw new Error(
         'Cannot write upload result: source sheet name is missing.');
@@ -4482,11 +5448,18 @@ function writeSourceUploadResult_(
       .setValue(result);
 
   if (wasSuccessful) {
+    const reviewedStatus = normalizeShopifyProductStatus_(productStatus);
+
+    if (!isValidShopifyProductStatus_(reviewedStatus)) {
+      throw new Error(
+          `Cannot write source result: invalid status ${productStatus}.`);
+    }
+
     sheet
         .getRange(
             Number(sourceRow),
             indices.status + 1)
-        .setValue(MYK_SHOPIFY.syncProductStatus);
+        .setValue(reviewedStatus);
 
     const taxonomy = normalizeTaxonomyCategoryId_(taxonomyCategoryId);
 
