@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #ffffff;
+        --surface-muted: #f6f8fb;
+        --border: #dce2ea;
+        --text: #1f2937;
+        --muted: #667085;
+        --primary: #2f6fed;
+        --primary-soft: #e9f0ff;
+        --danger: #c73535;
+        --danger-soft: #fff0f0;
+        --success: #18794e;
+        --success-soft: #eaf8f1;
+        --warning: #9a6700;
+        --warning-soft: #fff6d8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font-family: Arial, "Noto Sans", sans-serif;
+        font-size: 13px;
+      }
+
+      .app {
+        padding: 18px;
+      }
+
+      .heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 17px;
+        line-height: 1.3;
+      }
+
+      .stage {
+        flex: 0 0 auto;
+        border-radius: 999px;
+        padding: 4px 9px;
+        background: var(--primary-soft);
+        color: var(--primary);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+      }
+
+      .stage.complete {
+        background: var(--success-soft);
+        color: var(--success);
+      }
+
+      .stage.failed,
+      .stage.cancelled {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .progress-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 17px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .progress-header strong {
+        color: var(--text);
+      }
+
+      .track {
+        height: 12px;
+        margin-top: 7px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e8edf4;
+      }
+
+      .bar {
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #2f6fed, #5b8def);
+        transition: width 220ms ease;
+      }
+
+      .bar.complete {
+        background: var(--success);
+      }
+
+      .bar.failed,
+      .bar.cancelled {
+        background: var(--danger);
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .stat {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-muted);
+        padding: 8px 9px;
+      }
+
+      .stat-value {
+        display: block;
+        overflow: hidden;
+        font-size: 16px;
+        font-weight: 700;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .stat-label {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+      }
+
+      .detail {
+        margin-top: 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 9px 10px;
+      }
+
+      .detail-label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .detail-value {
+        min-height: 17px;
+        margin-top: 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .message {
+        min-height: 18px;
+        margin: 9px 1px 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .error {
+        display: none;
+        max-height: 70px;
+        margin-top: 9px;
+        overflow: auto;
+        border: 1px solid #f1bbbb;
+        border-radius: 7px;
+        background: var(--danger-soft);
+        color: #9f2525;
+        padding: 8px 9px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+      }
+
+      .error.visible {
+        display: block;
+      }
+
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 7px;
+      }
+
+      button {
+        min-width: 72px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--surface);
+        color: var(--text);
+        padding: 7px 11px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        background: var(--surface-muted);
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+
+      #cancelButton {
+        border-color: #efb2b2;
+        color: var(--danger);
+      }
+
+      #closeButton:not(:disabled) {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #ffffff;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <div class="heading">
+        <h1>Building Shopify review</h1>
+        <span id="stage" class="stage">PREPARING</span>
+      </div>
+
+      <div class="progress-header">
+        <span id="rowProgress">Preparing source rows…</span>
+        <strong id="percentage">0%</strong>
+      </div>
+
+      <div
+        class="track"
+        role="progressbar"
+        aria-label="Build review progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+      >
+        <div id="bar" class="bar"></div>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <span id="processed" class="stat-value">0</span>
+          <span class="stat-label">Processed</span>
+        </div>
+        <div class="stat">
+          <span id="reviewRows" class="stat-value">0</span>
+          <span class="stat-label">Review rows</span>
+        </div>
+        <div class="stat">
+          <span id="blockedRows" class="stat-value">0</span>
+          <span class="stat-label">Blocked</span>
+        </div>
+      </div>
+
+      <div class="detail">
+        <div class="detail-label">Current item</div>
+        <div id="currentItem" class="detail-value">Waiting to start…</div>
+      </div>
+
+      <div id="message" class="message">Preparing the review build.</div>
+      <div id="error" class="error" role="alert"></div>
+
+      <div class="footer">
+        <span id="hint" class="hint">Keep this window open while the review is building.</span>
+        <div class="actions">
+          <button id="cancelButton" type="button">Cancel</button>
+          <button id="closeButton" type="button" disabled>Close</button>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const jobId = <?!= JSON.stringify(jobId) ?>;
+      const TERMINAL_STAGES = new Set(['COMPLETE', 'FAILED', 'CANCELLED']);
+
+      let latestProgress = null;
+      let batchInFlight = false;
+      let pollInFlight = false;
+      let cancelInFlight = false;
+      let cancelRequested = false;
+      let clientStopped = false;
+      let pollTimer = null;
+
+      const elements = {
+        stage: document.getElementById('stage'),
+        rowProgress: document.getElementById('rowProgress'),
+        percentage: document.getElementById('percentage'),
+        track: document.querySelector('.track'),
+        bar: document.getElementById('bar'),
+        processed: document.getElementById('processed'),
+        reviewRows: document.getElementById('reviewRows'),
+        blockedRows: document.getElementById('blockedRows'),
+        currentItem: document.getElementById('currentItem'),
+        message: document.getElementById('message'),
+        error: document.getElementById('error'),
+        hint: document.getElementById('hint'),
+        cancelButton: document.getElementById('cancelButton'),
+        closeButton: document.getElementById('closeButton'),
+      };
+
+      function toNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : 0;
+      }
+
+      function normalizeProgress(value) {
+        const progress = value || {};
+        const stage = String(progress.stage || 'PREPARING').toUpperCase();
+        const totalRows = toNumber(progress.totalRows);
+        const processedRows = toNumber(progress.processedRows);
+        let percentage = Number(progress.percentage);
+
+        if (!Number.isFinite(percentage)) {
+          percentage = totalRows > 0
+            ? Math.round((processedRows / totalRows) * 100)
+            : 0;
+        }
+
+        percentage = Math.max(0, Math.min(100, percentage));
+
+        // Final sheet formatting still takes a moment after all rows are read.
+        if (!TERMINAL_STAGES.has(stage) && percentage >= 100) {
+          percentage = 99;
+        }
+
+        if (stage === 'COMPLETE') {
+          percentage = 100;
+        }
+
+        return {
+          stage,
+          totalRows,
+          processedRows,
+          reviewRows: toNumber(progress.reviewRows),
+          blockedRows: toNumber(progress.blockedRows),
+          percentage,
+          currentItem: String(progress.currentItem || ''),
+          message: String(progress.message || ''),
+          error: String(progress.error || ''),
+        };
+      }
+
+      function isTerminal(stage) {
+        return TERMINAL_STAGES.has(String(stage || '').toUpperCase());
+      }
+
+      function render(value) {
+        const progress = normalizeProgress(value);
+
+        // Polling and batch calls are asynchronous. Ignore an older polling
+        // response if a newer response has already completed or cancelled the
+        // job, otherwise the dialog can visually jump back to BUILDING.
+        if (
+          latestProgress &&
+          isTerminal(latestProgress.stage) &&
+          !isTerminal(progress.stage)
+        ) {
+          return;
+        }
+
+        latestProgress = progress;
+
+        const stageClass = progress.stage.toLowerCase();
+        elements.stage.textContent = progress.stage;
+        elements.stage.className = 'stage ' + stageClass;
+        elements.bar.className = 'bar ' + stageClass;
+        elements.bar.style.width = progress.percentage + '%';
+        elements.track.setAttribute('aria-valuenow', String(progress.percentage));
+        elements.percentage.textContent = progress.percentage + '%';
+        elements.processed.textContent = progress.processedRows;
+        elements.reviewRows.textContent = progress.reviewRows;
+        elements.blockedRows.textContent = progress.blockedRows;
+
+        elements.rowProgress.textContent = progress.totalRows > 0
+          ? progress.processedRows + ' of ' + progress.totalRows + ' source rows'
+          : 'Preparing source rows…';
+
+        elements.currentItem.textContent = progress.currentItem || (
+          progress.stage === 'COMPLETE'
+            ? 'Review sheet is ready.'
+            : 'Waiting for the next row…'
+        );
+
+        elements.message.textContent = progress.message || defaultMessage(progress.stage);
+        elements.error.textContent = progress.error;
+        elements.error.classList.toggle('visible', Boolean(progress.error));
+
+        if (isTerminal(progress.stage)) {
+          clientStopped = true;
+          stopPolling();
+          elements.cancelButton.disabled = true;
+          elements.closeButton.disabled = false;
+          elements.hint.textContent = progress.stage === 'COMPLETE'
+            ? 'The Shopify review sheet is ready.'
+            : 'The build has stopped. Check the message above.';
+        }
+      }
+
+      function defaultMessage(stage) {
+        switch (stage) {
+          case 'BUILDING':
+            return 'Reading and validating source products.';
+          case 'FINALIZING':
+            return 'Formatting the Shopify review sheet.';
+          case 'COMPLETE':
+            return 'Review build completed.';
+          case 'FAILED':
+            return 'Review build failed.';
+          case 'CANCELLED':
+            return 'Review build cancelled.';
+          default:
+            return 'Preparing the review build.';
+        }
+      }
+
+      function renderClientFailure(error) {
+        const message = error && error.message
+          ? error.message
+          : String(error || 'Unknown Apps Script error.');
+
+        render({
+          ...(latestProgress || {}),
+          stage: 'FAILED',
+          message: 'The review worker could not continue.',
+          error: message,
+        });
+      }
+
+      function runNextBatch() {
+        if (
+          clientStopped ||
+          cancelRequested ||
+          batchInFlight ||
+          (latestProgress && isTerminal(latestProgress.stage))
+        ) {
+          if (cancelRequested && !batchInFlight) {
+            sendCancel();
+          }
+          return;
+        }
+
+        batchInFlight = true;
+
+        google.script.run
+            .withSuccessHandler(function(progress) {
+              batchInFlight = false;
+              render(progress);
+
+              if (cancelRequested) {
+                sendCancel();
+              } else if (!clientStopped && !isTerminal(progress && progress.stage)) {
+                window.setTimeout(runNextBatch, 40);
+              }
+            })
+            .withFailureHandler(function(error) {
+              batchInFlight = false;
+              renderClientFailure(error);
+            })
+            .processReviewBuildBatch(jobId);
+      }
+
+      function pollProgress() {
+        if (clientStopped || pollInFlight) {
+          return;
+        }
+
+        pollInFlight = true;
+
+        google.script.run
+            .withSuccessHandler(function(progress) {
+              pollInFlight = false;
+              render(progress);
+            })
+            .withFailureHandler(function(error) {
+              pollInFlight = false;
+
+              // A batch response remains authoritative; only stop when no
+              // batch is available to return a better server-side status.
+              if (!batchInFlight) {
+                renderClientFailure(error);
+              }
+            })
+            .getReviewBuildProgress(jobId);
+      }
+
+      function requestCancel() {
+        if (clientStopped || cancelRequested || cancelInFlight) {
+          return;
+        }
+
+        cancelRequested = true;
+        elements.cancelButton.disabled = true;
+        elements.message.textContent = batchInFlight
+          ? 'Cancellation requested; finishing the current batch first.'
+          : 'Cancelling review build…';
+
+        if (!batchInFlight) {
+          sendCancel();
+        }
+      }
+
+      function sendCancel() {
+        if (clientStopped || cancelInFlight) {
+          return;
+        }
+
+        cancelInFlight = true;
+
+        google.script.run
+            .withSuccessHandler(function(progress) {
+              cancelInFlight = false;
+              render(progress || {
+                ...(latestProgress || {}),
+                stage: 'CANCELLED',
+                message: 'Review build cancelled.',
+              });
+            })
+            .withFailureHandler(function(error) {
+              cancelInFlight = false;
+              renderClientFailure(error);
+            })
+            .cancelReviewBuild(jobId);
+      }
+
+      function stopPolling() {
+        if (pollTimer !== null) {
+          window.clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }
+
+      elements.cancelButton.addEventListener('click', requestCancel);
+      elements.closeButton.addEventListener('click', function() {
+        if (!elements.closeButton.disabled) {
+          google.script.host.close();
+        }
+      });
+
+      pollProgress();
+      pollTimer = window.setInterval(pollProgress, 900);
+      window.setTimeout(runNextBatch, 80);
+    </script>
+  </body>
+</html>

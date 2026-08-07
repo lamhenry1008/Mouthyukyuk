@@ -11,7 +11,7 @@
  *   7. Upload approved rows to Shopify.
  *
  * New SKU:
- *   Creates an ACTIVE Shopify product after explicit review approval.
+ *   Creates a Shopify product with the reviewed source-sheet status.
  *
  * One exact existing SKU:
  *   Updates the corresponding Shopify product and variant.
@@ -175,6 +175,13 @@ const MYK_UPLOAD_JOB = Object.freeze({
 
   triggerFunctionName:
     'resumeApprovedRowsUpload',
+});
+
+const MYK_REVIEW_BUILD = Object.freeze({
+  batchSize: 15,
+  maxBatchRuntimeMs: 25 * 1000,
+  stateKeyPrefix: 'MYK_REVIEW_BUILD_',
+  stagingSheetPrefix: '__MYK_REVIEW_',
 });
 
 /**
@@ -750,130 +757,744 @@ function verifyProductMetafields_(accessToken, productId) {
 }
 
 /**
- * Builds the review sheet from the currently active source sheet.
+ * Starts a client-driven, resumable review build from the active source tab.
  *
- * The build performs read-only taxonomy lookups against Shopify so the review
- * and source sheet contain the current category GID before approval.
+ * The browser dialog requests one small server batch at a time. This lets the
+ * progress bar repaint between batches and avoids a single long Apps Script
+ * execution. The current visible review remains untouched until finalization.
  */
 function buildReviewFromActiveSheet() {
+  const lock = LockService.getUserLock();
+  lock.waitLock(10000);
+
+  try {
+    initializeReviewBuildFromActiveSheet_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function initializeReviewBuildFromActiveSheet_() {
   const spreadsheet = SpreadsheetApp.getActive();
   const sourceSheet = spreadsheet.getActiveSheet();
   const sourceSheetName = sourceSheet.getName();
 
-  if (sourceSheetName === MYK_SHOPIFY.reviewSheetName) {
+  if (
+    sourceSheetName === MYK_SHOPIFY.reviewSheetName ||
+    sourceSheetName.indexOf(MYK_REVIEW_BUILD.stagingSheetPrefix) === 0
+  ) {
     throw new Error(
-        'Select a source product sheet before building the review.');
+        'Select a configured source product sheet before building the review.');
   }
 
   const profile = requireSheetProfile_(sourceSheetName);
   const taxonomyColumnIndex = ensureSourceTaxonomyColumn_(
       sourceSheet,
       profile);
-  // Keep permanent Shopify identities on the source sheet. Existing values
-  // are copied into the review; missing values are filled by preflight or by
-  // a successful create/upload later in the workflow.
-  ensureSourceShopifyIdentityColumns_(sourceSheet);
-  const sourceValues = sourceSheet.getDataRange().getDisplayValues();
 
-  if (sourceValues.length < 2) {
+  // Permanent Shopify identities are copied into the review and later filled
+  // by preflight or upload when they are missing.
+  ensureSourceShopifyIdentityColumns_(sourceSheet);
+
+  const lastSourceRow = sourceSheet.getLastRow();
+
+  if (lastSourceRow < 2) {
     throw new Error(
         `The source sheet “${sourceSheetName}” has no data rows.`);
   }
 
-  const sourceIndices = getColumnIndices(sourceSheet);
-  const reviewRows = [];
-  const taxonomyColumnValues = sourceValues
-      .slice(1)
-      .map((row) => [clean_(row[taxonomyColumnIndex])]);
+  cleanupOldReviewBuilds_(spreadsheet);
 
-  for (let offset = 1; offset < sourceValues.length; offset += 1) {
-    const sourceRowValues = sourceValues[offset];
+  const jobId = Utilities.getUuid().replace(/-/g, '');
+  const stagingSheetName =
+    `${MYK_REVIEW_BUILD.stagingSheetPrefix}${jobId.substring(0, 12)}`;
+  const stagingSheet = spreadsheet.insertSheet(stagingSheetName);
 
-    if (sourceRowValues.every((value) => !clean_(value))) {
-      continue;
+  ensureSheetSize_(
+      stagingSheet,
+      lastSourceRow,
+      MYK_SHOPIFY.resultHeaders.length);
+
+  stagingSheet
+      .getRange(1, 1, 1, MYK_SHOPIFY.resultHeaders.length)
+      .setValues([MYK_SHOPIFY.resultHeaders]);
+  stagingSheet.hideSheet();
+
+  const now = new Date().toISOString();
+  const state = {
+    jobId,
+    spreadsheetId: spreadsheet.getId(),
+    sourceSheetId: sourceSheet.getSheetId(),
+    sourceSheetName,
+    stagingSheetId: stagingSheet.getSheetId(),
+    stagingSheetName,
+    taxonomyColumnIndex,
+    nextRow: 2,
+    lastSourceRow,
+    totalRows: lastSourceRow - 1,
+    processedRows: 0,
+    reviewRows: 0,
+    blockedRows: 0,
+    stage: 'PREPARING',
+    currentItem: '',
+    message: 'Preparing the first batch…',
+    error: '',
+    startedAt: now,
+    updatedAt: now,
+  };
+
+  saveReviewBuildState_(state);
+  showReviewBuildProgress_(jobId);
+}
+
+/** Processes one source-row batch or finalizes the completed review. */
+function processReviewBuildBatch(jobId) {
+  const lock = LockService.getUserLock();
+
+  if (!lock.tryLock(5000)) {
+    const waitingState = loadReviewBuildState_(jobId);
+
+    if (waitingState) {
+      waitingState.message = 'Waiting for the current batch to finish…';
+      return reviewBuildProgressFromState_(waitingState);
     }
 
-    const sourceRowNumber = offset + 1;
-
-    const product = buildNormalizedProduct_(
-        sourceSheetName,
-        sourceRowNumber,
-        sourceRowValues,
-        sourceIndices,
-        profile);
-
-    const validation = validateNormalizedProduct_(product);
-    const sourceProductGid = getAliasedValue_(
-        sourceRowValues,
-        sourceIndices,
-        ['Shopify Product GID']);
-    const sourceVariantGid = getAliasedValue_(
-        sourceRowValues,
-        sourceIndices,
-        ['Shopify Variant GID']);
-    const sourceInventoryItemGid = getAliasedValue_(
-        sourceRowValues,
-        sourceIndices,
-        ['Shopify Inventory Item GID']);
-
-    if (product.taxonomyCategoryId) {
-      taxonomyColumnValues[offset - 1][0] =
-        product.taxonomyCategoryId;
-    }
-
-    reviewRows.push([
-      false,
-      'PENDING',
-      validation,
-      'NOT_CHECKED',
-      sourceSheetName,
-      sourceRowNumber,
-      product.itemType,
-      product.itemId,
-      product.handle,
-      product.englishName,
-      product.collection,
-      product.chineseName,
-      product.brand,
-      product.productType,
-      product.status,
-      product.taxonomyCategoryId,
-      product.sku,
-      product.price,
-      product.inventory,
-      product.baseColors.join(', '),
-      product.glitterColors.join(', '),
-      product.sheenColors.join(', '),
-      product.glitterPotionColor,
-      product.glitterPotionSize,
-      product.tags.join(', '),
-      product.bodyHtml,
-      product.imageUrl,
-      sourceProductGid,
-      sourceVariantGid,
-      sourceInventoryItemGid,
-      'NOT_UPLOADED',
-      '',
-    ]);
+    return missingReviewBuildProgress_(jobId);
   }
 
-  if (taxonomyColumnValues.length > 0) {
+  let state = null;
+
+  try {
+    state = loadReviewBuildState_(jobId);
+
+    if (!state) {
+      return missingReviewBuildProgress_(jobId);
+    }
+
+    if (isTerminalReviewBuildStage_(state.stage)) {
+      return reviewBuildProgressFromState_(state);
+    }
+
+    const spreadsheet = SpreadsheetApp.openById(state.spreadsheetId);
+    const sourceSheet = findSheetById_(
+        spreadsheet,
+        state.sourceSheetId);
+    const stagingSheet = findSheetById_(
+        spreadsheet,
+        state.stagingSheetId);
+
+    if (!sourceSheet) {
+      throw new Error(
+          `The source sheet “${state.sourceSheetName}” no longer exists.`);
+    }
+
+    if (!stagingSheet) {
+      throw new Error(
+          'The temporary review-build sheet no longer exists. Start again.');
+    }
+
+    if (state.stage === 'FINALIZING') {
+      finalizeReviewBuild_(spreadsheet, stagingSheet, state);
+      return reviewBuildProgressFromState_(state);
+    }
+
+    state.stage = 'BUILDING';
+    const startedAt = Date.now();
+    const startRow = Math.max(2, Number(state.nextRow) || 2);
+
+    if (startRow > state.lastSourceRow) {
+      state.stage = 'FINALIZING';
+      state.currentItem = '';
+      state.message = 'All rows prepared. Formatting the review…';
+      saveReviewBuildState_(state);
+      return reviewBuildProgressFromState_(state);
+    }
+
+    let endRow = Math.min(
+        state.lastSourceRow,
+        startRow + MYK_REVIEW_BUILD.batchSize - 1);
+
+    const sourceLastColumn = sourceSheet.getLastColumn();
+    const sourceIndices = getColumnIndices(sourceSheet);
+    const profile = requireSheetProfile_(state.sourceSheetName);
+    const batchValues = sourceSheet
+        .getRange(
+            startRow,
+            1,
+            endRow - startRow + 1,
+            sourceLastColumn)
+        .getDisplayValues();
+    const stagingRows = [];
+    const taxonomyValues = [];
+    let batchReviewRows = 0;
+    let batchBlockedRows = 0;
+    let rowsHandled = 0;
+
+    for (let offset = 0; offset < batchValues.length; offset += 1) {
+      if (
+        rowsHandled > 0 &&
+        Date.now() - startedAt >= MYK_REVIEW_BUILD.maxBatchRuntimeMs
+      ) {
+        endRow = startRow + rowsHandled - 1;
+        break;
+      }
+
+      const row = batchValues[offset];
+      const sourceRowNumber = startRow + offset;
+      const currentTaxonomy = clean_(
+          row[state.taxonomyColumnIndex]);
+
+      if (row.every((value) => !clean_(value))) {
+        stagingRows.push(
+            new Array(MYK_SHOPIFY.resultHeaders.length).fill(''));
+        taxonomyValues.push([currentTaxonomy]);
+        rowsHandled += 1;
+        continue;
+      }
+
+      state.currentItem =
+        getAliasedValue_(
+            row,
+            sourceIndices,
+            profile.aliases.englishName) ||
+        getAliasedValue_(
+            row,
+            sourceIndices,
+            profile.aliases.sku) ||
+        `Source row ${sourceRowNumber}`;
+      state.message =
+        `Reading ${state.sourceSheetName}, row ${sourceRowNumber}…`;
+      state.updatedAt = new Date().toISOString();
+      saveReviewBuildState_(state);
+
+      try {
+        const product = buildNormalizedProduct_(
+            state.sourceSheetName,
+            sourceRowNumber,
+            row,
+            sourceIndices,
+            profile);
+        const validation = validateNormalizedProduct_(product);
+
+        stagingRows.push(buildReviewRow_(
+            state.sourceSheetName,
+            sourceRowNumber,
+            row,
+            sourceIndices,
+            product,
+            validation));
+
+        taxonomyValues.push([
+          product.taxonomyCategoryId || currentTaxonomy,
+        ]);
+        batchReviewRows += 1;
+
+        if (normalize_(validation).indexOf('BLOCKED:') === 0) {
+          batchBlockedRows += 1;
+        }
+      } catch (error) {
+        const failureMessage = formatReviewBuildError_(error);
+
+        stagingRows.push(buildReviewErrorRow_(
+            state.sourceSheetName,
+            sourceRowNumber,
+            row,
+            sourceIndices,
+            profile,
+            failureMessage));
+        taxonomyValues.push([currentTaxonomy]);
+        batchReviewRows += 1;
+        batchBlockedRows += 1;
+      }
+
+      rowsHandled += 1;
+    }
+
+    if (rowsHandled === 0) {
+      throw new Error(
+          'The review builder could not process a source row in this batch.');
+    }
+
+    ensureSheetSize_(
+        stagingSheet,
+        endRow,
+        MYK_SHOPIFY.resultHeaders.length);
+    stagingSheet
+        .getRange(
+            startRow,
+            1,
+            stagingRows.length,
+            MYK_SHOPIFY.resultHeaders.length)
+        .setValues(stagingRows);
     sourceSheet
         .getRange(
-            2,
-            taxonomyColumnIndex + 1,
-            taxonomyColumnValues.length,
+            startRow,
+            state.taxonomyColumnIndex + 1,
+            taxonomyValues.length,
             1)
-        .setValues(taxonomyColumnValues);
+        .setValues(taxonomyValues);
+
+    state.processedRows += rowsHandled;
+    state.reviewRows += batchReviewRows;
+    state.blockedRows += batchBlockedRows;
+    state.nextRow = endRow + 1;
+    state.currentItem = '';
+    state.updatedAt = new Date().toISOString();
+
+    if (state.nextRow > state.lastSourceRow) {
+      state.stage = 'FINALIZING';
+      state.message = 'All rows prepared. Formatting the review…';
+    } else {
+      state.message =
+        `Prepared ${state.processedRows} of ${state.totalRows} source rows.`;
+    }
+
+    saveReviewBuildState_(state);
+    SpreadsheetApp.flush();
+    return reviewBuildProgressFromState_(state);
+  } catch (error) {
+    if (!state) {
+      state = {
+        jobId: clean_(jobId),
+        stage: 'FAILED',
+        totalRows: 0,
+        processedRows: 0,
+        reviewRows: 0,
+        blockedRows: 0,
+        currentItem: '',
+        message: 'Review build failed.',
+        error: formatReviewBuildError_(error),
+      };
+    } else {
+      state.stage = 'FAILED';
+      state.message = 'Review build stopped. The existing review was kept.';
+      state.error = formatReviewBuildError_(error);
+      state.updatedAt = new Date().toISOString();
+      saveReviewBuildState_(state);
+    }
+
+    return reviewBuildProgressFromState_(state);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Returns lightweight job state for the progress window. */
+function getReviewBuildProgress(jobId) {
+  const state = loadReviewBuildState_(jobId);
+
+  return state
+    ? reviewBuildProgressFromState_(state)
+    : missingReviewBuildProgress_(jobId);
+}
+
+/** Cancels a review build and removes only its hidden temporary sheet. */
+function cancelReviewBuild(jobId) {
+  const lock = LockService.getUserLock();
+  lock.waitLock(10000);
+
+  try {
+    const state = loadReviewBuildState_(jobId);
+
+    if (!state) {
+      return missingReviewBuildProgress_(jobId);
+    }
+
+    if (!isTerminalReviewBuildStage_(state.stage)) {
+      state.stage = 'CANCELLED';
+      state.currentItem = '';
+      state.message = 'Review build cancelled. The existing review was kept.';
+      state.error = '';
+      state.updatedAt = new Date().toISOString();
+
+      try {
+        const spreadsheet = SpreadsheetApp.openById(state.spreadsheetId);
+        const stagingSheet = findSheetById_(
+            spreadsheet,
+            state.stagingSheetId);
+
+        if (stagingSheet) {
+          spreadsheet.deleteSheet(stagingSheet);
+        }
+      } catch (error) {
+        console.warn(
+            `Unable to remove cancelled review staging sheet: ${error.message}`);
+      }
+
+      saveReviewBuildState_(state);
+    }
+
+    return reviewBuildProgressFromState_(state);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function showReviewBuildProgress_(jobId) {
+  const template = HtmlService.createTemplateFromFile('ReviewProgress');
+  template.jobId = jobId;
+
+  const html = template
+      .evaluate()
+      .setWidth(520)
+      .setHeight(390);
+
+  SpreadsheetApp.getUi().showModelessDialog(
+      html,
+      'Build Shopify review');
+}
+
+function finalizeReviewBuild_(spreadsheet, stagingSheet, state) {
+  state.stage = 'FINALIZING';
+  state.currentItem = '';
+  state.message = 'Writing and formatting the review sheet…';
+  state.updatedAt = new Date().toISOString();
+  saveReviewBuildState_(state);
+
+  const sourceSheetColumn = requiredColumn_(
+      MYK_SHOPIFY.resultHeaders.reduce((indices, heading, index) => {
+        indices[formatHeaderKey_(heading)] = index;
+        return indices;
+      }, {}),
+      'Source Sheet');
+  const stagedValues = state.lastSourceRow >= 2
+    ? stagingSheet
+        .getRange(
+            2,
+            1,
+            state.lastSourceRow - 1,
+            MYK_SHOPIFY.resultHeaders.length)
+        .getValues()
+    : [];
+  const reviewRows = stagedValues.filter((row) => {
+    return clean_(row[sourceSheetColumn]) !== '';
+  });
+
+  replaceReviewSheetFromStaging_(
+      spreadsheet,
+      stagingSheet,
+      reviewRows);
+
+  state.stage = 'COMPLETE';
+  state.processedRows = state.totalRows;
+  state.reviewRows = reviewRows.length;
+  state.currentItem = '';
+  state.message =
+    `Built ${reviewRows.length} review row(s) from ` +
+    `“${state.sourceSheetName}”. Run “Check Shopify” next.`;
+  state.error = '';
+  state.updatedAt = new Date().toISOString();
+  saveReviewBuildState_(state);
+}
+
+/**
+ * Fully prepares the hidden staging sheet before replacing the live review.
+ * If formatting fails, the previous visible review is never cleared.
+ */
+function replaceReviewSheetFromStaging_(
+    spreadsheet,
+    stagingSheet,
+    rows) {
+  writeReviewRowsToSheet_(stagingSheet, rows);
+
+  const reviewName = MYK_SHOPIFY.reviewSheetName;
+  const stagingName = stagingSheet.getName();
+  const previousReview = spreadsheet.getSheetByName(reviewName);
+  const backupName =
+    `${MYK_REVIEW_BUILD.stagingSheetPrefix}OLD_` +
+    Utilities.getUuid().replace(/-/g, '').substring(0, 10);
+
+  if (previousReview) {
+    previousReview.setName(backupName);
   }
 
-  writeReviewSheet_(spreadsheet, reviewRows);
+  try {
+    stagingSheet.setName(reviewName);
+    stagingSheet.showSheet();
+  } catch (error) {
+    if (stagingSheet.getName() === reviewName) {
+      try {
+        stagingSheet.setName(stagingName);
+      } catch (renameError) {
+        console.warn(
+            `Unable to restore staging-sheet name: ${renameError.message}`);
+      }
+    }
 
-  SpreadsheetApp.getUi().alert(
-      `Built ${reviewRows.length} review row(s) from “${sourceSheetName}”.\n\n` +
-      'Shopify GID columns and latest taxonomy IDs are now present in the ' +
-      'source sheet. Existing GIDs were copied into the review. Run the ' +
-      'Shopify check next to fill missing GIDs for existing products.');
+    if (previousReview && !spreadsheet.getSheetByName(reviewName)) {
+      previousReview.setName(reviewName);
+      previousReview.showSheet();
+    }
+
+    throw error;
+  }
+
+  try {
+    spreadsheet.setActiveSheet(stagingSheet);
+  } catch (error) {
+    console.warn(
+        `Unable to activate the completed review sheet: ${error.message}`);
+  }
+
+  if (previousReview) {
+    try {
+      spreadsheet.deleteSheet(previousReview);
+    } catch (error) {
+      // The new review is already live; a leftover backup can be removed by
+      // the next build's temporary-sheet cleanup.
+      console.warn(
+          `Unable to delete the previous review backup: ${error.message}`);
+    }
+  }
+}
+
+function buildReviewRow_(
+    sourceSheetName,
+    sourceRowNumber,
+    sourceRowValues,
+    sourceIndices,
+    product,
+    validation) {
+  return [
+    false,
+    'PENDING',
+    validation,
+    'NOT_CHECKED',
+    sourceSheetName,
+    sourceRowNumber,
+    product.itemType,
+    product.itemId,
+    product.handle,
+    product.englishName,
+    product.collection,
+    product.chineseName,
+    product.brand,
+    product.productType,
+    product.status,
+    product.taxonomyCategoryId,
+    product.sku,
+    product.price,
+    product.inventory,
+    product.baseColors.join(', '),
+    product.glitterColors.join(', '),
+    product.sheenColors.join(', '),
+    product.glitterPotionColor,
+    product.glitterPotionSize,
+    product.tags.join(', '),
+    product.bodyHtml,
+    product.imageUrl,
+    getAliasedValue_(
+        sourceRowValues,
+        sourceIndices,
+        ['Shopify Product GID']),
+    getAliasedValue_(
+        sourceRowValues,
+        sourceIndices,
+        ['Shopify Variant GID']),
+    getAliasedValue_(
+        sourceRowValues,
+        sourceIndices,
+        ['Shopify Inventory Item GID']),
+    'NOT_UPLOADED',
+    '',
+  ];
+}
+
+/** Creates an inspectable blocked row instead of aborting the full build. */
+function buildReviewErrorRow_(
+    sourceSheetName,
+    sourceRowNumber,
+    row,
+    sourceIndices,
+    profile,
+    failureMessage) {
+  const aliases = profile.aliases;
+  const englishName = getAliasedValue_(
+      row,
+      sourceIndices,
+      aliases.englishName);
+  const sku = normalizeSku_(getAliasedValue_(
+      row,
+      sourceIndices,
+      aliases.sku));
+  const itemType = normalizeCodePart_(profile.itemType);
+  const inventory =
+    getAliasedValue_(row, sourceIndices, aliases.inventory) ||
+    getAliasedValue_(row, sourceIndices, aliases.stock);
+  const blockedMessage = `BLOCKED: REVIEW_BUILD_ERROR: ${failureMessage}`;
+
+  return [
+    false,
+    'PENDING',
+    blockedMessage,
+    'BLOCKED',
+    sourceSheetName,
+    sourceRowNumber,
+    itemType,
+    sku ? `${itemType}-${sku}` : '',
+    slugifyHandle_(englishName),
+    englishName,
+    getAliasedValue_(row, sourceIndices, aliases.collection),
+    getAliasedValue_(row, sourceIndices, aliases.chineseName),
+    getAliasedValue_(row, sourceIndices, aliases.brand),
+    getAliasedValue_(row, sourceIndices, aliases.productType),
+    normalizeShopifyProductStatus_(
+        getAliasedValue_(row, sourceIndices, aliases.status)),
+    getAliasedValue_(row, sourceIndices, aliases.taxonomyCategoryId),
+    sku,
+    getAliasedValue_(row, sourceIndices, aliases.price),
+    inventory,
+    getAliasedValue_(row, sourceIndices, aliases.baseColors),
+    getAliasedValue_(row, sourceIndices, aliases.glitterColors),
+    getAliasedValue_(row, sourceIndices, aliases.sheenColors),
+    getAliasedValue_(row, sourceIndices, aliases.glitterPotionColor),
+    getAliasedValue_(row, sourceIndices, aliases.glitterPotionSize),
+    getAliasedValue_(row, sourceIndices, aliases.tags),
+    getAliasedValue_(row, sourceIndices, aliases.desc),
+    normalizeReviewImageUrls_(
+        getAliasedValue_(row, sourceIndices, aliases.imageUrl)),
+    getAliasedValue_(row, sourceIndices, ['Shopify Product GID']),
+    getAliasedValue_(row, sourceIndices, ['Shopify Variant GID']),
+    getAliasedValue_(row, sourceIndices, ['Shopify Inventory Item GID']),
+    failureMessage,
+    '',
+  ];
+}
+
+function reviewBuildStateKey_(jobId) {
+  const safeJobId = clean_(jobId).replace(/[^A-Za-z0-9]/g, '');
+
+  if (!safeJobId) {
+    throw new Error('Invalid review-build job ID.');
+  }
+
+  return `${MYK_REVIEW_BUILD.stateKeyPrefix}${safeJobId}`;
+}
+
+function saveReviewBuildState_(state) {
+  state.updatedAt = new Date().toISOString();
+  PropertiesService
+      .getUserProperties()
+      .setProperty(
+          reviewBuildStateKey_(state.jobId),
+          JSON.stringify(state));
+}
+
+function loadReviewBuildState_(jobId) {
+  const value = PropertiesService
+      .getUserProperties()
+      .getProperty(reviewBuildStateKey_(jobId));
+
+  return value ? JSON.parse(value) : null;
+}
+
+function reviewBuildProgressFromState_(state) {
+  const totalRows = Math.max(0, Number(state.totalRows) || 0);
+  const processedRows = Math.max(0, Number(state.processedRows) || 0);
+  let percentage = totalRows > 0
+    ? Math.min(98, Math.round((processedRows / totalRows) * 98))
+    : 0;
+
+  if (state.stage === 'FINALIZING') {
+    percentage = 99;
+  } else if (state.stage === 'COMPLETE') {
+    percentage = 100;
+  }
+
+  return {
+    jobId: state.jobId,
+    stage: state.stage,
+    sourceSheetName: state.sourceSheetName || '',
+    totalRows,
+    processedRows,
+    reviewRows: Math.max(0, Number(state.reviewRows) || 0),
+    blockedRows: Math.max(0, Number(state.blockedRows) || 0),
+    currentItem: state.currentItem || '',
+    message: state.message || '',
+    error: state.error || '',
+    percentage,
+  };
+}
+
+function missingReviewBuildProgress_(jobId) {
+  return {
+    jobId: clean_(jobId),
+    stage: 'FAILED',
+    sourceSheetName: '',
+    totalRows: 0,
+    processedRows: 0,
+    reviewRows: 0,
+    blockedRows: 0,
+    currentItem: '',
+    message: 'This review-build job is no longer available.',
+    error: 'Start Build Review again from the source sheet.',
+    percentage: 0,
+  };
+}
+
+function isTerminalReviewBuildStage_(stage) {
+  return ['COMPLETE', 'FAILED', 'CANCELLED']
+      .indexOf(normalize_(stage)) !== -1;
+}
+
+function formatReviewBuildError_(error) {
+  return clean_(error && error.message ? error.message : error)
+      .replace(/[\r\n]+/g, ' ')
+      .substring(0, 500) || 'Unknown review-build error';
+}
+
+function findSheetById_(spreadsheet, sheetId) {
+  const normalizedId = Number(sheetId);
+
+  return spreadsheet.getSheets().find((sheet) => {
+    return sheet.getSheetId() === normalizedId;
+  }) || null;
+}
+
+function ensureSheetSize_(sheet, requiredRows, requiredColumns) {
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(
+        sheet.getMaxRows(),
+        requiredRows - sheet.getMaxRows());
+  }
+
+  if (sheet.getMaxColumns() < requiredColumns) {
+    sheet.insertColumnsAfter(
+        sheet.getMaxColumns(),
+        requiredColumns - sheet.getMaxColumns());
+  }
+}
+
+function cleanupOldReviewBuilds_(spreadsheet) {
+  const properties = PropertiesService.getUserProperties();
+  const allProperties = properties.getProperties();
+  const spreadsheetId = spreadsheet.getId();
+
+  Object.keys(allProperties).forEach((key) => {
+    if (key.indexOf(MYK_REVIEW_BUILD.stateKeyPrefix) !== 0) {
+      return;
+    }
+
+    let oldState = null;
+
+    try {
+      oldState = JSON.parse(allProperties[key]);
+    } catch (error) {
+      // A malformed temporary state cannot be resumed safely.
+    }
+
+    if (!oldState || oldState.spreadsheetId === spreadsheetId) {
+      properties.deleteProperty(key);
+    }
+  });
+
+  spreadsheet.getSheets().forEach((sheet) => {
+    if (
+      sheet.getName().indexOf(MYK_REVIEW_BUILD.stagingSheetPrefix) === 0
+    ) {
+      spreadsheet.deleteSheet(sheet);
+    }
+  });
 }
 
 /**
@@ -1014,6 +1635,8 @@ function buildNormalizedProduct_(
             sourceIndices,
             profile.aliases.taxonomyCategoryId));
 
+  // resolveTaxonomyCategoryForProductType_ caches by normalized Product Type,
+  // so each distinct type is looked up once without enlarging job state.
   const taxonomyCategoryId =
     resolveTaxonomyCategoryForProductType_(
         productType,
@@ -1173,18 +1796,23 @@ function resolveTaxonomyCategoryForProductType_(
   }
 
   let selected = null;
+  let liveLookupFailed = false;
 
   try {
     selected = selectBestTaxonomyCategory_(
         searchShopifyTaxonomyCategories_(searchTerm),
         searchTerm);
   } catch (error) {
+    liveLookupFailed = true;
     console.warn(
         `Live Shopify taxonomy lookup failed for “${productType}”: ` +
         `${error.message}`);
   }
 
-  if (!selected) {
+  // Only download and parse the published taxonomy when the live API request
+  // itself failed. A successful but ambiguous search must not trigger a slow
+  // second lookup or silently choose a different category.
+  if (!selected && liveLookupFailed) {
     try {
       selected = selectBestTaxonomyCategory_(
           getLatestPublishedTaxonomyCandidates_(searchTerm),
@@ -4790,6 +5418,12 @@ function writeReviewSheet_(spreadsheet, rows) {
         MYK_SHOPIFY.reviewSheetName);
   }
 
+  writeReviewRowsToSheet_(sheet, rows);
+}
+
+/** Writes and formats review rows on a supplied destination sheet. */
+function writeReviewRowsToSheet_(sheet, rows) {
+
   // Remove the existing filter before clearing/rebuilding the sheet.
   const existingFilter = sheet.getFilter();
 
@@ -4800,6 +5434,13 @@ function writeReviewSheet_(spreadsheet, rows) {
   sheet.clear();
 
   const headers = MYK_SHOPIFY.resultHeaders;
+
+  // A new Google sheet normally has only 26 columns, while the review has
+  // more. Expand both dimensions before requesting the destination ranges.
+  ensureSheetSize_(
+      sheet,
+      Math.max(1, rows.length + 1),
+      headers.length);
 
   sheet
       .getRange(1, 1, 1, headers.length)
@@ -4970,7 +5611,14 @@ function getAliasedValue_(
     const position = sourceIndices[key];
 
     if (position !== undefined) {
-      return clean_(row[position]);
+      const value = clean_(row[position]);
+
+      // Some source sheets contain both an older and a newer alias (for
+      // example, Image URL and Image URLs). Prefer the first non-empty value
+      // instead of letting an empty legacy column hide populated data.
+      if (value) {
+        return value;
+      }
     }
   }
 
