@@ -1,6 +1,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html>
 <head>
@@ -321,6 +322,237 @@
       margin-left: auto;
       color: var(--muted);
     }
+
+    .mto-bulk-view[hidden] {
+      display: none;
+    }
+
+    .mto-bulk-view {
+      position: fixed;
+      z-index: 50;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: #fff;
+    }
+
+    .mto-bulk-view.saving {
+      cursor: wait;
+    }
+
+    .mto-bulk-view.saving .mto-bulk-header,
+    .mto-bulk-view.saving .mto-bulk-actions,
+    .mto-bulk-view.saving .mto-bulk-table-wrap,
+    .mto-bulk-view.saving .mto-bulk-footer {
+      pointer-events: none;
+    }
+
+    .mto-bulk-header,
+    .mto-bulk-actions,
+    .mto-bulk-footer {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 8px;
+      align-items: end;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .mto-bulk-header {
+      align-items: center;
+    }
+
+    .mto-bulk-header h2 {
+      flex: 0 0 auto;
+      margin: 0 8px 0 0;
+      font-size: 17px;
+    }
+
+    .mto-bulk-source {
+      width: 185px;
+    }
+
+    .mto-bulk-filter {
+      width: min(340px, 32vw);
+    }
+
+    .mto-bulk-actions {
+      background: var(--surface);
+    }
+
+    .mto-bulk-action-field {
+      min-width: 160px;
+    }
+
+    .mto-bulk-action-field label {
+      margin-bottom: 3px;
+    }
+
+    .mto-bulk-selection {
+      align-self: center;
+      min-width: 115px;
+      color: var(--muted);
+    }
+
+    .mto-bulk-message {
+      align-self: center;
+      margin-left: auto;
+      color: var(--muted);
+    }
+
+    .mto-bulk-message.error {
+      color: var(--red);
+    }
+
+    .mto-bulk-message.success {
+      color: #137333;
+    }
+
+    .mto-bulk-table-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      background: #fff;
+    }
+
+    .mto-bulk-table {
+      width: 100%;
+      min-width: 1530px;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+
+    .mto-bulk-table th,
+    .mto-bulk-table td {
+      padding: 5px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      background: #fff;
+    }
+
+    .mto-bulk-table th {
+      position: sticky;
+      z-index: 2;
+      top: 0;
+      color: #3c4043;
+      background: #eef2f6;
+      text-align: left;
+    }
+
+    .mto-bulk-table th:first-child,
+    .mto-bulk-table td:first-child {
+      position: sticky;
+      z-index: 1;
+      left: 0;
+      text-align: center;
+    }
+
+    .mto-bulk-table th:first-child {
+      z-index: 3;
+      background: #eef2f6;
+    }
+
+    .mto-bulk-table input[type="checkbox"] {
+      width: auto;
+      margin-top: 7px;
+    }
+
+    .mto-bulk-table input {
+      min-width: 0;
+      padding: 6px;
+    }
+
+    .mto-bulk-table tr.saved td {
+      background: #f0f8f1;
+    }
+
+    .mto-bulk-table tr.saved td:first-child {
+      background: #f0f8f1;
+    }
+
+    .mto-image-cell {
+      text-align: center;
+    }
+
+    .mto-image-cell img {
+      display: block;
+      width: 58px;
+      height: 58px;
+      margin: 0 auto;
+      border-radius: 4px;
+      object-fit: contain;
+      background: #f3f4f6;
+    }
+
+    .mto-image-cell input {
+      margin-top: 5px;
+      padding: 4px;
+      font-size: 10px;
+    }
+
+    .mto-image-missing {
+      display: flex;
+      width: 58px;
+      height: 58px;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto;
+      border: 1px dashed #d69e2e;
+      border-radius: 4px;
+      color: #8a5a00;
+      background: #fff8e1;
+      font-size: 10px;
+      line-height: 1.2;
+    }
+
+    .mto-source-row {
+      padding-top: 8px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .mto-invalid-cell input {
+      border: 2px solid var(--red);
+      background: #fff4f4;
+    }
+
+    .mto-warning-cell {
+      background: #fff8e1 !important;
+    }
+
+    .mto-row-status {
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .mto-row-status.ready {
+      color: #137333;
+    }
+
+    .mto-row-status.blocked {
+      color: var(--red);
+    }
+
+    .mto-row-status.warning {
+      color: #8a5a00;
+    }
+
+    .mto-bulk-empty {
+      padding: 45px 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .mto-bulk-footer {
+      justify-content: flex-end;
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+    }
   </style>
 </head>
 <body>
@@ -332,6 +564,7 @@
     >
     <button onclick="search()">Search</button>
     <button onclick="newProduct()">New product</button>
+    <button onclick="openMtoBulkEditor()">Bulk to MTO</button>
     <button onclick="openCheckout()">Checkout</button>
     <button class="primary" onclick="save()">Save to Shopify + Sheet</button>
     <span id="status" class="status"></span>
@@ -344,11 +577,114 @@
     </div>
   </div>
 
+  <section id="mto-bulk-view" class="mto-bulk-view" hidden>
+    <div class="mto-bulk-header">
+      <h2>Bulk copy to MTO 32</h2>
+      <div class="mto-bulk-source">
+        <label for="mto-bulk-source">Product sheet</label>
+        <select id="mto-bulk-source"></select>
+      </div>
+      <button onclick="loadMtoBulkSourceRows()">Load sheet</button>
+      <div class="mto-bulk-filter">
+        <label for="mto-bulk-filter">Filter loaded products</label>
+        <input
+          id="mto-bulk-filter"
+          placeholder="ID, English/Chinese name, option, or source row"
+          oninput="filterMtoBulkRows(this.value)"
+        >
+      </div>
+      <span id="mto-bulk-load-summary" class="mto-bulk-message"></span>
+      <button onclick="closeMtoBulkEditor()">Close</button>
+    </div>
+
+    <div class="mto-bulk-actions">
+      <button onclick="selectAllVisibleMtoRows()">Select all visible</button>
+      <button onclick="clearMtoBulkSelection()">Clear selection</button>
+      <span id="mto-bulk-selected" class="mto-bulk-selection">0 selected</span>
+      <div class="mto-bulk-action-field">
+        <label for="mto-bulk-location">Location for selected</label>
+        <input
+          id="mto-bulk-location"
+          list="mto-location-options"
+          placeholder="大篋, 細篋, or another location"
+        >
+      </div>
+      <button onclick="applyMtoLocationToSelected()">
+        Apply location
+      </button>
+      <span id="mto-bulk-validation" class="mto-bulk-message"></span>
+    </div>
+
+    <div class="mto-bulk-table-wrap">
+      <table class="mto-bulk-table">
+        <colgroup>
+          <col style="width: 42px">
+          <col style="width: 185px">
+          <col style="width: 76px">
+          <col style="width: 145px">
+          <col style="width: 190px">
+          <col style="width: 165px">
+          <col style="width: 155px">
+          <col style="width: 88px">
+          <col style="width: 130px">
+          <col style="width: 82px">
+          <col style="width: 210px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Select</th>
+            <th>Image</th>
+            <th>Source row</th>
+            <th>MTO Item ID *</th>
+            <th>English Name *</th>
+            <th>Chinese Name *</th>
+            <th>Option</th>
+            <th>Price *</th>
+            <th>Location *</th>
+            <th>Stock *</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="mto-bulk-rows"></tbody>
+      </table>
+      <div id="mto-bulk-empty" class="mto-bulk-empty">
+        Choose a source product sheet to begin.
+      </div>
+    </div>
+
+    <datalist id="mto-location-options"></datalist>
+
+    <div class="mto-bulk-footer">
+      <span id="mto-bulk-save-status" class="mto-bulk-message"></span>
+      <button onclick="closeMtoBulkEditor()">Cancel</button>
+      <button
+        id="mto-bulk-save"
+        class="primary"
+        onclick="saveMtoBulkSelection()"
+        disabled
+      >
+        Copy selected to MTO 32 Summary
+      </button>
+    </div>
+  </section>
+
   <script>
     const initialMode = '<?= mode ?>';
     let model = null;
     let errors = {};
     let editorOptions = null;
+    const mtoBulk = {
+      bootstrap: null,
+      sourceSheetName: '',
+      sourceSheetId: '',
+      rows: [],
+      filter: '',
+      locations: ['大篋', '細篋'],
+      existingItemIds: new Set(),
+      dirty: false,
+      loading: false,
+      saving: false,
+    };
 
     const esc = (value) => String(value ?? '').replace(
       /[&<>"']/g,
@@ -380,6 +716,1026 @@
       }
 
       return editorOptions;
+    }
+
+    const clientClean = (value) => String(value ?? '').trim();
+
+    function normalizeMtoItemId(value) {
+      return clientClean(value).toUpperCase();
+    }
+
+    function uniqueMtoValues(values) {
+      const seen = new Set();
+
+      return (values || []).map(clientClean).filter((value) => {
+        const key = value.toUpperCase();
+
+        if (!key || seen.has(key)) {
+          return false;
+        }
+
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function mtoBulkMaxRows() {
+      const configured = Number(
+        mtoBulk.bootstrap && mtoBulk.bootstrap.maxRows
+      );
+
+      return Number.isInteger(configured) && configured > 0
+        ? configured
+        : 500;
+    }
+
+    function mtoBulkSourceSheets(bootstrap) {
+      const source = bootstrap && (
+        bootstrap.sourceSheets ||
+        bootstrap.sheetNames ||
+        bootstrap.sheets
+      ) || [];
+
+      return source.map((sheet) => {
+        if (typeof sheet === 'string') {
+          return {name: sheet, label: sheet};
+        }
+
+        const name = clientClean(
+          sheet && (sheet.name || sheet.sheetName || sheet.value)
+        );
+
+        return {
+          name,
+          label: clientClean(sheet && (sheet.label || sheet.name)) || name,
+        };
+      }).filter((sheet) => sheet.name);
+    }
+
+    function mtoBulkImageText(value) {
+      if (Array.isArray(value)) {
+        return value.map(clientClean).filter(Boolean).join('\n');
+      }
+
+      return clientClean(value);
+    }
+
+    function firstMtoBulkImage(value) {
+      const first = mtoBulkImageText(value)
+        .split(/[\r\n;|]+/)
+        .map(clientClean)
+        .find(Boolean) || '';
+
+      return /^https?:\/\/[^\s]+$/i.test(first) ? first : '';
+    }
+
+    function looksLikeMtoBulkFormula(value) {
+      return /^[=+\-@]/.test(clientClean(value));
+    }
+
+    function normalizeMtoBulkRow(source, index) {
+      source = source || {};
+
+      const itemId = clientClean(
+        source.itemId ||
+        source.mtoItemId ||
+        source.sourceItemId ||
+        source.id
+      );
+      const existingAtLoad = Boolean(
+        source.existsInMto ||
+        source.existingInMto ||
+        source.alreadyExists ||
+        source.isExisting
+      );
+      const sourceErrors = Array.isArray(source.errors)
+        ? source.errors.map(clientClean).filter(Boolean)
+        : (
+          clientClean(source.error || source.blockedReason)
+            ? [clientClean(source.error || source.blockedReason)]
+            : []
+        );
+
+      return {
+        clientIndex: index,
+        sourceSheetName: clientClean(
+          source.sourceSheetName ||
+          source.sheetName ||
+          mtoBulk.sourceSheetName
+        ),
+        sourceRow: Number(
+          source.sourceRow || source.rowNumber || source.row || 0
+        ),
+        sourceSheetId: clientClean(
+          source.sourceSheetId || source.sheetId || mtoBulk.sourceSheetId
+        ),
+        sourceFingerprint: clientClean(
+          source.sourceFingerprint || source.fingerprint
+        ),
+        itemId,
+        originalItemId: itemId,
+        englishName: clientClean(
+          source.englishName || source.title || source.productTitle
+        ),
+        chineseName: clientClean(
+          source.chineseName || source.titleChinese
+        ),
+        option: clientClean(
+          source.option || source.itemOption || source.variantTitle
+        ),
+        price: source.price == null ? '' : clientClean(source.price),
+        location: clientClean(
+          source.location || source.itemLocation || source.sourceLocation
+        ),
+        stock: source.stock == null
+          ? (
+            source.inventory == null
+              ? ''
+              : clientClean(source.inventory)
+          )
+          : clientClean(source.stock),
+        imageUrl: mtoBulkImageText(
+          source.imageUrl || source.imageUrls || source.images
+        ),
+        selected: source.selected === true,
+        saved: false,
+        dirty: false,
+        existingAtLoad,
+        serverErrors: sourceErrors,
+      };
+    }
+
+    function setMtoBulkMessage(elementId, message, tone = '') {
+      const element = document.getElementById(elementId);
+
+      if (!element) {
+        return;
+      }
+
+      element.textContent = message || '';
+      element.classList.remove('error', 'success');
+
+      if (tone) {
+        element.classList.add(tone);
+      }
+    }
+
+    function renderMtoBulkLocations() {
+      const datalist = document.getElementById('mto-location-options');
+
+      if (!datalist) {
+        return;
+      }
+
+      mtoBulk.locations = uniqueMtoValues([
+        '大篋',
+        '細篋',
+        ...mtoBulk.locations,
+      ]);
+
+      datalist.innerHTML = mtoBulk.locations.map((location) => {
+        return `<option value="${esc(location)}"></option>`;
+      }).join('');
+    }
+
+    function collectMtoBulkExistingIds(source) {
+      const values = source && (
+        source.existingItemIds ||
+        source.existingIds ||
+        source.mtoItemIds
+      ) || [];
+
+      (values || []).forEach((value) => {
+        const key = normalizeMtoItemId(value);
+
+        if (key) {
+          mtoBulk.existingItemIds.add(key);
+        }
+      });
+    }
+
+    function renderMtoBulkBootstrap() {
+      const sourceSelect = document.getElementById('mto-bulk-source');
+      const sheets = mtoBulkSourceSheets(mtoBulk.bootstrap);
+
+      sourceSelect.innerHTML = sheets.map((sheet) => {
+        return `<option value="${esc(sheet.name)}">${esc(sheet.label)}</option>`;
+      }).join('');
+
+      const preferred = clientClean(
+        mtoBulk.bootstrap && (
+          mtoBulk.bootstrap.defaultSourceSheetName ||
+          mtoBulk.bootstrap.activeSheetName ||
+          mtoBulk.bootstrap.sourceSheetName
+        )
+      );
+
+      if (preferred && sheets.some((sheet) => sheet.name === preferred)) {
+        sourceSelect.value = preferred;
+      }
+
+      mtoBulk.locations = uniqueMtoValues([
+        ...mtoBulk.locations,
+        ...(
+          mtoBulk.bootstrap && (
+            mtoBulk.bootstrap.locations ||
+            mtoBulk.bootstrap.locationOptions
+          ) || []
+        ),
+      ]);
+      collectMtoBulkExistingIds(mtoBulk.bootstrap);
+      renderMtoBulkLocations();
+    }
+
+    async function openMtoBulkEditor() {
+      const view = document.getElementById('mto-bulk-view');
+      view.hidden = false;
+      mtoBulk.loading = true;
+      setMtoBulkMessage(
+        'mto-bulk-load-summary',
+        'Loading source sheets…'
+      );
+
+      try {
+        mtoBulk.bootstrap = await call('getMtoBulkEditorBootstrap');
+        mtoBulk.existingItemIds = new Set();
+        renderMtoBulkBootstrap();
+
+        const sourceSelect = document.getElementById('mto-bulk-source');
+
+        if (!sourceSelect.options.length) {
+          throw new Error(
+            'No product sheets are available. Add a sheet such as 墨水 first.'
+          );
+        }
+
+        await loadMtoBulkSourceRows(true);
+      } catch (error) {
+        setMtoBulkMessage(
+          'mto-bulk-load-summary',
+          error.message || String(error),
+          'error'
+        );
+      } finally {
+        mtoBulk.loading = false;
+        refreshMtoBulkSummary();
+      }
+    }
+
+    function closeMtoBulkEditor() {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      const hasChanges = mtoBulk.dirty ||
+        mtoBulk.rows.some((row) => row.selected && !row.saved);
+
+      if (
+        hasChanges &&
+        !confirm('Close the bulk editor and discard unsaved selections?')
+      ) {
+        return;
+      }
+
+      if (initialMode === 'mto-bulk') {
+        google.script.host.close();
+        return;
+      }
+
+      document.getElementById('mto-bulk-view').hidden = true;
+    }
+
+    async function loadMtoBulkSourceRows(skipDiscardPrompt = false) {
+      if (
+        mtoBulk.saving ||
+        (mtoBulk.loading && !skipDiscardPrompt)
+      ) {
+        return;
+      }
+
+      const sourceSelect = document.getElementById('mto-bulk-source');
+      const sheetName = clientClean(sourceSelect.value);
+
+      if (!sheetName) {
+        return;
+      }
+
+      if (
+        !skipDiscardPrompt &&
+        (mtoBulk.dirty || mtoBulk.rows.some((row) => row.selected)) &&
+        !confirm('Load another sheet and discard the current bulk edits?')
+      ) {
+        return;
+      }
+
+      mtoBulk.loading = true;
+      mtoBulk.sourceSheetName = sheetName;
+      mtoBulk.sourceSheetId = '';
+      setMtoBulkMessage(
+        'mto-bulk-load-summary',
+        `Loading ${sheetName}…`
+      );
+      refreshMtoBulkSummary();
+
+      try {
+        const response = await call('getMtoBulkSourceRows', sheetName);
+        const rawRows = Array.isArray(response)
+          ? response
+          : (
+            response && (
+              response.rows || response.items || response.products
+            ) || []
+          );
+
+        mtoBulk.sourceSheetId = clientClean(
+          response && (response.sourceSheetId || response.sheetId)
+        );
+        collectMtoBulkExistingIds(response);
+
+        if (response && (response.locations || response.locationOptions)) {
+          mtoBulk.locations = uniqueMtoValues([
+            ...mtoBulk.locations,
+            ...(response.locations || response.locationOptions),
+          ]);
+          renderMtoBulkLocations();
+        }
+
+        mtoBulk.rows = rawRows.map(normalizeMtoBulkRow);
+        mtoBulk.filter = '';
+        mtoBulk.dirty = false;
+        document.getElementById('mto-bulk-filter').value = '';
+        renderMtoBulkRows();
+        setMtoBulkMessage(
+          'mto-bulk-load-summary',
+          `${mtoBulk.rows.length} row(s) loaded from ${sheetName}.`
+        );
+      } catch (error) {
+        mtoBulk.rows = [];
+        renderMtoBulkRows();
+        setMtoBulkMessage(
+          'mto-bulk-load-summary',
+          error.message || String(error),
+          'error'
+        );
+      } finally {
+        mtoBulk.loading = false;
+        refreshMtoBulkSummary();
+      }
+    }
+
+    function mtoBulkSelectedIdCounts() {
+      const counts = new Map();
+
+      mtoBulk.rows.forEach((row) => {
+        if (!row.selected || row.saved) {
+          return;
+        }
+
+        const key = normalizeMtoItemId(row.itemId);
+
+        if (key) {
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+      });
+
+      return counts;
+    }
+
+    function isExistingMtoBulkRow(row) {
+      const itemIdKey = normalizeMtoItemId(row && row.itemId);
+
+      if (!itemIdKey) {
+        return false;
+      }
+
+      return Boolean(
+        mtoBulk.existingItemIds.has(itemIdKey) ||
+        (
+          row.existingAtLoad &&
+          itemIdKey === normalizeMtoItemId(row.originalItemId)
+        )
+      );
+    }
+
+    function validateMtoBulkRow(row, idCounts) {
+      const errorsByField = {};
+      const errors = [];
+      const warnings = [];
+      const addError = (field, message) => {
+        errorsByField[field] = true;
+        errors.push(message);
+      };
+      const itemIdKey = normalizeMtoItemId(row.itemId);
+
+      if (!clientClean(row.sourceFingerprint)) {
+        errors.push('Source row fingerprint is missing; reload this sheet.');
+      }
+
+      if (!itemIdKey) {
+        addError('itemId', 'MTO Item ID is required.');
+      } else {
+        if (isExistingMtoBulkRow(row)) {
+          addError('itemId', 'This MTO Item ID already exists.');
+        }
+
+        if (row.selected && (idCounts.get(itemIdKey) || 0) > 1) {
+          addError('itemId', 'Duplicate MTO Item ID in this selection.');
+        }
+      }
+
+      if (!clientClean(row.englishName)) {
+        addError('englishName', 'English Name is required.');
+      }
+
+      if (!clientClean(row.chineseName)) {
+        addError('chineseName', 'Chinese Name is required.');
+      }
+
+      [
+        ['itemId', 'MTO Item ID', row.itemId],
+        ['englishName', 'English Name', row.englishName],
+        ['chineseName', 'Chinese Name', row.chineseName],
+        ['option', 'Option', row.option],
+        ['location', 'Location', row.location],
+      ].forEach((entry) => {
+        if (looksLikeMtoBulkFormula(entry[2])) {
+          addError(
+            entry[0],
+            `${entry[1]} cannot begin with =, +, -, or @.`
+          );
+        }
+      });
+
+      if (
+        clientClean(row.price) === '' ||
+        !Number.isFinite(Number(row.price)) ||
+        Number(row.price) < 0
+      ) {
+        addError('price', 'Price must be zero or a positive number.');
+      }
+
+      if (!clientClean(row.location)) {
+        addError('location', 'Choose or enter a location.');
+      }
+
+      if (
+        clientClean(row.stock) === '' ||
+        !Number.isInteger(Number(row.stock)) ||
+        Number(row.stock) < 0
+      ) {
+        addError('stock', 'Stock must be a non-negative whole number.');
+      }
+
+      (row.serverErrors || []).forEach((message) => {
+        if (message) {
+          errors.push(message);
+        }
+      });
+
+      if (!firstMtoBulkImage(row.imageUrl)) {
+        warnings.push('Missing image URL.');
+      }
+
+      return {errorsByField, errors, warnings};
+    }
+
+    function mtoBulkRowStatusHtml(row, validation) {
+      if (row.saved) {
+        return '<span class="mto-row-status ready">Copied to MTO 32</span>';
+      }
+
+      if (validation.errors.length) {
+        return `
+          <span class="mto-row-status blocked">
+            ${validation.errors.map(esc).join('<br>')}
+          </span>
+        `;
+      }
+
+      if (validation.warnings.length) {
+        return `
+          <span class="mto-row-status warning">
+            Ready with warning:<br>${validation.warnings.map(esc).join('<br>')}
+          </span>
+        `;
+      }
+
+      return '<span class="mto-row-status ready">Ready</span>';
+    }
+
+    function mtoBulkMatchesFilter(row, index) {
+      const term = clientClean(mtoBulk.filter).toLowerCase();
+
+      if (!term) {
+        return true;
+      }
+
+      const text = [
+        row.sourceRow,
+        row.itemId,
+        row.englishName,
+        row.chineseName,
+        row.option,
+        row.location,
+        row.saved ? 'copied saved' : '',
+        index + 1,
+      ].join(' ').toLowerCase();
+
+      return text.includes(term);
+    }
+
+    function renderMtoBulkRows() {
+      const tbody = document.getElementById('mto-bulk-rows');
+      const empty = document.getElementById('mto-bulk-empty');
+      const idCounts = mtoBulkSelectedIdCounts();
+      const visible = mtoBulk.rows
+        .map((row, index) => ({row, index}))
+        .filter(({row, index}) => mtoBulkMatchesFilter(row, index));
+
+      tbody.innerHTML = visible.map(({row, index}) => {
+        const validation = validateMtoBulkRow(row, idCounts);
+        const cellClass = (field) => {
+          return validation.errorsByField[field]
+            ? 'mto-invalid-cell'
+            : '';
+        };
+        const imageUrl = firstMtoBulkImage(row.imageUrl);
+
+        return `
+          <tr id="mto-bulk-row-${index}" class="${row.saved ? 'saved' : ''}">
+            <td>
+              <input
+                type="checkbox"
+                aria-label="Select source row ${esc(row.sourceRow || index + 2)}"
+                ${row.selected ? 'checked' : ''}
+                ${
+                  mtoBulk.saving ||
+                  row.saved ||
+                  (isExistingMtoBulkRow(row) && !row.selected)
+                    ? 'disabled'
+                    : ''
+                }
+                onchange="toggleMtoBulkRow(${index}, this.checked)"
+              >
+            </td>
+            <td class="mto-image-cell ${imageUrl ? '' : 'mto-warning-cell'}">
+              <div>
+                ${
+                  imageUrl
+                    ? `<img src="${esc(imageUrl)}" alt="${esc(row.englishName)}">`
+                    : '<div class="mto-image-missing">Missing<br>image</div>'
+                }
+              </div>
+              <input
+                type="url"
+                placeholder="Image URL (optional)"
+                value="${esc(row.imageUrl)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'imageUrl', this.value)"
+              >
+            </td>
+            <td class="mto-source-row">${esc(row.sourceRow || index + 2)}</td>
+            <td data-mto-cell="itemId" class="${cellClass('itemId')}">
+              <input
+                value="${esc(row.itemId)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'itemId', this.value)"
+              >
+            </td>
+            <td data-mto-cell="englishName" class="${cellClass('englishName')}">
+              <input
+                value="${esc(row.englishName)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'englishName', this.value)"
+              >
+            </td>
+            <td data-mto-cell="chineseName" class="${cellClass('chineseName')}">
+              <input
+                value="${esc(row.chineseName)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'chineseName', this.value)"
+              >
+            </td>
+            <td data-mto-cell="option" class="${cellClass('option')}">
+              <input
+                value="${esc(row.option)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'option', this.value)"
+              >
+            </td>
+            <td data-mto-cell="price" class="${cellClass('price')}">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value="${esc(row.price)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'price', this.value)"
+              >
+            </td>
+            <td data-mto-cell="location" class="${cellClass('location')}">
+              <input
+                list="mto-location-options"
+                value="${esc(row.location)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'location', this.value)"
+              >
+            </td>
+            <td data-mto-cell="stock" class="${cellClass('stock')}">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value="${esc(row.stock)}"
+                ${row.saved || mtoBulk.saving ? 'readonly' : ''}
+                oninput="updateMtoBulkRow(${index}, 'stock', this.value)"
+              >
+            </td>
+            <td data-mto-status>
+              ${mtoBulkRowStatusHtml(row, validation)}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      empty.hidden = visible.length > 0;
+      empty.textContent = mtoBulk.rows.length
+        ? 'No loaded rows match this filter.'
+        : 'This source sheet has no product rows.';
+      refreshMtoBulkSummary();
+    }
+
+    function refreshMtoBulkRowValidation() {
+      const idCounts = mtoBulkSelectedIdCounts();
+
+      mtoBulk.rows.forEach((row, index) => {
+        const rowElement = document.getElementById(`mto-bulk-row-${index}`);
+
+        if (!rowElement) {
+          return;
+        }
+
+        const validation = validateMtoBulkRow(row, idCounts);
+
+        [
+          'itemId',
+          'englishName',
+          'chineseName',
+          'option',
+          'price',
+          'location',
+          'stock',
+        ]
+          .forEach((field) => {
+            const cell = rowElement.querySelector(
+              `[data-mto-cell="${field}"]`
+            );
+
+            if (cell) {
+              cell.classList.toggle(
+                'mto-invalid-cell',
+                Boolean(validation.errorsByField[field])
+              );
+            }
+          });
+
+        const status = rowElement.querySelector('[data-mto-status]');
+
+        const checkbox = rowElement.querySelector('input[type="checkbox"]');
+
+        if (checkbox) {
+          checkbox.disabled = Boolean(
+            mtoBulk.saving ||
+            row.saved ||
+            (isExistingMtoBulkRow(row) && !row.selected)
+          );
+        }
+
+        if (status) {
+          status.innerHTML = mtoBulkRowStatusHtml(row, validation);
+        }
+      });
+
+      refreshMtoBulkSummary();
+    }
+
+    function refreshMtoBulkSummary() {
+      const selected = mtoBulk.rows.filter((row) => {
+        return row.selected && !row.saved;
+      });
+      const idCounts = mtoBulkSelectedIdCounts();
+      const invalid = selected.filter((row) => {
+        return validateMtoBulkRow(row, idCounts).errors.length > 0;
+      });
+      const warnings = selected.reduce((total, row) => {
+        return total + validateMtoBulkRow(row, idCounts).warnings.length;
+      }, 0);
+      const overLimit = selected.length > mtoBulkMaxRows();
+      const view = document.getElementById('mto-bulk-view');
+
+      if (view) {
+        view.classList.toggle('saving', mtoBulk.saving);
+        view.setAttribute('aria-busy', String(mtoBulk.saving));
+      }
+
+      document.getElementById('mto-bulk-selected').textContent =
+        `${selected.length} selected`;
+
+      setMtoBulkMessage(
+        'mto-bulk-validation',
+        overLimit
+          ? `Select no more than ${mtoBulkMaxRows()} rows at a time.`
+          : (
+            invalid.length
+              ? `${invalid.length} selected row(s) need changes.`
+              : (
+                warnings
+                  ? `${warnings} image warning(s); copying is still allowed.`
+                  : (selected.length ? 'Selected rows are ready.' : '')
+              )
+          ),
+        overLimit || invalid.length ? 'error' : ''
+      );
+
+      const saveButton = document.getElementById('mto-bulk-save');
+      saveButton.disabled = Boolean(
+        mtoBulk.loading ||
+        mtoBulk.saving ||
+        !selected.length ||
+        overLimit ||
+        invalid.length
+      );
+    }
+
+    function updateMtoBulkRow(index, field, value) {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      const row = mtoBulk.rows[index];
+
+      if (!row || row.saved) {
+        return;
+      }
+
+      row[field] = value;
+      row.serverErrors = [];
+      row.dirty = true;
+      mtoBulk.dirty = true;
+      refreshMtoBulkRowValidation();
+    }
+
+    function toggleMtoBulkRow(index, selected) {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      const row = mtoBulk.rows[index];
+
+      if (!row || row.saved) {
+        return;
+      }
+
+      row.selected = Boolean(selected);
+      refreshMtoBulkRowValidation();
+    }
+
+    function filterMtoBulkRows(value) {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      mtoBulk.filter = value;
+      renderMtoBulkRows();
+    }
+
+    function selectAllVisibleMtoRows() {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      mtoBulk.rows.forEach((row, index) => {
+        if (
+          !row.saved &&
+          !isExistingMtoBulkRow(row) &&
+          mtoBulkMatchesFilter(row, index)
+        ) {
+          row.selected = true;
+        }
+      });
+      renderMtoBulkRows();
+    }
+
+    function clearMtoBulkSelection() {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      mtoBulk.rows.forEach((row) => {
+        row.selected = false;
+      });
+      renderMtoBulkRows();
+    }
+
+    function applyMtoLocationToSelected() {
+      if (mtoBulk.saving) {
+        return;
+      }
+
+      const input = document.getElementById('mto-bulk-location');
+      const location = clientClean(input.value);
+      const selected = mtoBulk.rows.filter((row) => {
+        return row.selected && !row.saved;
+      });
+
+      if (!location) {
+        alert('Choose 大篋, 細篋, or enter another location first.');
+        return;
+      }
+
+      if (!selected.length) {
+        alert('Select at least one row first.');
+        return;
+      }
+
+      selected.forEach((row) => {
+        row.location = location;
+        row.serverErrors = [];
+        row.dirty = true;
+      });
+      mtoBulk.locations = uniqueMtoValues([
+        ...mtoBulk.locations,
+        location,
+      ]);
+      mtoBulk.dirty = true;
+      renderMtoBulkLocations();
+      renderMtoBulkRows();
+    }
+
+    function applyMtoBulkSaveErrors(result) {
+      const errors = result && (result.rowErrors || result.errors);
+
+      if (!errors) {
+        return;
+      }
+
+      const entries = Array.isArray(errors)
+        ? errors
+        : Object.keys(errors).map((key) => ({
+          key,
+          message: errors[key],
+        }));
+
+      entries.forEach((entry) => {
+        if (typeof entry === 'string') {
+          return;
+        }
+
+        const sourceRow = Number(entry.sourceRow || entry.row || entry.key);
+        const itemId = normalizeMtoItemId(
+          entry.itemId || entry.mtoItemId || entry.key
+        );
+        const row = mtoBulk.rows.find((candidate) => {
+          return (
+            (sourceRow && candidate.sourceRow === sourceRow) ||
+            (itemId && normalizeMtoItemId(candidate.itemId) === itemId)
+          );
+        });
+
+        if (row) {
+          const message = clientClean(
+            entry.message || entry.error || entry.reason
+          );
+          const normalizedMessage = message || 'Save was blocked.';
+
+          if (!row.serverErrors.includes(normalizedMessage)) {
+            row.serverErrors.push(normalizedMessage);
+          }
+        }
+      });
+    }
+
+    async function saveMtoBulkSelection() {
+      const selected = mtoBulk.rows.filter((row) => {
+        return row.selected && !row.saved;
+      });
+      const idCounts = mtoBulkSelectedIdCounts();
+      const invalid = selected.filter((row) => {
+        return validateMtoBulkRow(row, idCounts).errors.length > 0;
+      });
+
+      if (!selected.length) {
+        alert('Select at least one source row.');
+        return;
+      }
+
+      if (selected.length > mtoBulkMaxRows()) {
+        alert(`Select no more than ${mtoBulkMaxRows()} rows at a time.`);
+        return;
+      }
+
+      if (invalid.length) {
+        alert('Complete the highlighted fields and resolve duplicate IDs.');
+        refreshMtoBulkRowValidation();
+        return;
+      }
+
+      const missingImageCount = selected.filter((row) => {
+        return !firstMtoBulkImage(row.imageUrl);
+      }).length;
+      const warning = missingImageCount
+        ? `\n\n${missingImageCount} selected row(s) have no image URL.`
+        : '';
+
+      if (!confirm(
+        `Copy ${selected.length} new item(s) to MTO 32 Summary?` +
+        `\n\nMTO Item Left will start at Stock and MTO Item Sold at 0.` +
+        warning
+      )) {
+        return;
+      }
+
+      const payloadRows = selected.map((row) => ({
+        sourceSheetName: row.sourceSheetName || mtoBulk.sourceSheetName,
+        sourceSheetId: row.sourceSheetId || mtoBulk.sourceSheetId,
+        sourceRow: row.sourceRow,
+        sourceFingerprint: row.sourceFingerprint,
+        itemId: clientClean(row.itemId),
+        englishName: clientClean(row.englishName),
+        chineseName: clientClean(row.chineseName),
+        option: clientClean(row.option),
+        price: Number(row.price),
+        location: clientClean(row.location),
+        stock: Number(row.stock),
+        imageUrl: mtoBulkImageText(row.imageUrl),
+      }));
+
+      mtoBulk.saving = true;
+      setMtoBulkMessage(
+        'mto-bulk-save-status',
+        'Copying selected products…'
+      );
+      renderMtoBulkRows();
+
+      try {
+        const result = await call('saveMtoBulkRows', {
+          sourceSheetName: mtoBulk.sourceSheetName,
+          sourceSheetId: mtoBulk.sourceSheetId,
+          rows: payloadRows,
+        });
+
+        if (result && result.ok === false) {
+          applyMtoBulkSaveErrors(result);
+          renderMtoBulkRows();
+          setMtoBulkMessage(
+            'mto-bulk-save-status',
+            result.message || 'Some rows could not be copied.',
+            'error'
+          );
+          return;
+        }
+
+        selected.forEach((row) => {
+          row.saved = true;
+          row.selected = false;
+          row.dirty = false;
+          mtoBulk.existingItemIds.add(normalizeMtoItemId(row.itemId));
+        });
+        mtoBulk.dirty = mtoBulk.rows.some((row) => row.dirty && !row.saved);
+
+        if (result && (result.locations || result.locationOptions)) {
+          mtoBulk.locations = uniqueMtoValues([
+            ...mtoBulk.locations,
+            ...(result.locations || result.locationOptions),
+          ]);
+          renderMtoBulkLocations();
+        }
+
+        const copiedCount = Number(
+          result && (
+            result.createdCount ||
+            result.copiedCount ||
+            result.addedCount ||
+            result.writtenCount
+          )
+        ) || selected.length;
+
+        renderMtoBulkRows();
+        setMtoBulkMessage(
+          'mto-bulk-save-status',
+          `${copiedCount} item(s) copied to MTO 32 Summary.`,
+          'success'
+        );
+      } catch (error) {
+        setMtoBulkMessage(
+          'mto-bulk-save-status',
+          error.message || String(error),
+          'error'
+        );
+      } finally {
+        mtoBulk.saving = false;
+        renderMtoBulkRows();
+      }
     }
 
     async function openCheckout() {
@@ -1432,6 +2788,8 @@
 
     if (initialMode === 'new') {
       newProduct();
+    } else if (initialMode === 'mto-bulk') {
+      openMtoBulkEditor();
     }
   </script>
 </body>

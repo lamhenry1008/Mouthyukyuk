@@ -16,6 +16,7 @@ const APP = Object.freeze({
     itemId: ['ID', 'Item ID'],
     title: ['English Name', 'Title'],
     chineseName: ['Chinese Name'],
+    option: ['Option', 'Variant Option', 'Item Option'],
     handle: ['Handle'],
     vendor: ['Brand', 'Vendor'],
     collection: ['Collection'],
@@ -28,6 +29,8 @@ const APP = Object.freeze({
     sheenColors: ['Ink Sheen Color', 'Ink Sheen Colors'],
     glitterPotionColor: ['Glitter Potion Color', 'Glitter Color'],
     glitterPotionSize: ['Glitter Potion Size', 'Glitter Size'],
+    penBaseColor: ['Pen Base Color'],
+    penSize: ['Pen Size'],
     descriptionHtml: ['Desc', 'Description', 'Body HTML', 'Body (HTML)'],
     tags: ['Label Tag', 'Tags'],
     sku: ['SKU', 'Variant SKU'],
@@ -63,6 +66,11 @@ const EDITOR_ITEM_TYPE_CODES = Object.freeze({
   'GP': 'GP',
   'FOUNTAIN PEN': 'PEN',
   'DIP PEN': 'PEN',
+  'BALLPOINT PEN': 'PEN',
+  'ROLLERBALL PEN': 'PEN',
+  'GEL PEN': 'PEN',
+  'PENCIL': 'PEN',
+  'MECHANICAL PENCIL': 'PEN',
   'NOTEBOOK': 'NOTEBOOK',
   'PAPER': 'PAPER',
   'ACCESSORY': 'ACCESSORY',
@@ -70,6 +78,7 @@ const EDITOR_ITEM_TYPE_CODES = Object.freeze({
 
 const EDITOR_RESERVED_SHEET_NAMES = Object.freeze([
   '訂單紀錄',
+  'MTO 32 Summary',
 ]);
 
 const EDITOR_DEFAULT_OPTIONS = Object.freeze({
@@ -145,6 +154,64 @@ const EDITOR_DEFAULT_OPTIONS = Object.freeze({
   ],
   glitterPotionColors: [],
   glitterPotionSizes: [],
+  penBaseColors: [],
+  penSizes: [],
+});
+
+/**
+ * Product-specific source fields are deliberately isolated by sheet. This
+ * prevents the editor from adding ink columns to a pen sheet (or vice versa)
+ * while still allowing common product fields to be shared.
+ */
+const EDITOR_SHEET_FAMILIES = Object.freeze({
+  '墨水': 'INK',
+  '閃粉': 'GLITTER_POTION',
+  '鋼筆': 'PEN',
+  '原子筆/鉛筆': 'PEN',
+});
+
+const EDITOR_COMMON_SOURCE_HEADERS = Object.freeze([
+  'Chinese Name',
+  'English Name',
+  'Option',
+  'Brand',
+  'Product Type',
+  'SKU',
+  'Cost',
+  'Price',
+  'Stock',
+  'Purchased',
+  'Sold',
+  'Inventory',
+]);
+
+const EDITOR_COMMON_SOURCE_TRAILING_HEADERS = Object.freeze([
+  'Label Tag',
+  'Image URL',
+  'Desc',
+  'Handle',
+  'ID',
+  'Collection',
+  'Status',
+  'Last Updated',
+  'Upload Result',
+]);
+
+const EDITOR_SHEET_SPECIAL_HEADERS = Object.freeze({
+  INK: Object.freeze([
+    'Ink Size',
+    'Ink Base Color',
+    'Ink Glitter Color',
+    'Ink Sheen Color',
+  ]),
+  GLITTER_POTION: Object.freeze([
+    'Glitter Potion Color',
+    'Glitter Potion Size',
+  ]),
+  PEN: Object.freeze([
+    'Pen Base Color',
+    'Pen Size',
+  ]),
 });
 
 function onOpen() {
@@ -154,6 +221,7 @@ function onOpen() {
   ui.createMenu('Shopify Editor')
       .addItem('Open editor', 'showCatalogEditor')
       .addItem('Open new product', 'showNewProductEditor')
+      .addItem('Bulk to MTO', 'showMtoBulkEditor')
       .addSeparator()
       .addItem('Checkout', 'showCheckoutDialog')
       .addToUi();
@@ -227,6 +295,73 @@ function normalizeEditorProductTypeKey_(value) {
       .toUpperCase();
 }
 
+function getEditorSheetFamily_(sheetName) {
+  return EDITOR_SHEET_FAMILIES[clean_(sheetName)] || '';
+}
+
+function getEditorSourceHeaders_(sheetName) {
+  const family = getEditorSheetFamily_(sheetName);
+  const specialHeaders = EDITOR_SHEET_SPECIAL_HEADERS[family] || [];
+
+  return [
+    ...EDITOR_COMMON_SOURCE_HEADERS,
+    ...specialHeaders,
+    ...EDITOR_COMMON_SOURCE_TRAILING_HEADERS,
+  ];
+}
+
+function getEditorCanonicalSourceFields_(sheetName) {
+  const fields = {};
+  const headerKeys = new Set(
+      getEditorSourceHeaders_(sheetName).map((header) => {
+        return clean_(header).toLowerCase().replace(/\s+/g, '_');
+      }));
+
+  Object.keys(APP.sheetAliases).forEach((field) => {
+    const matchesCanonicalHeader = APP.sheetAliases[field].some((alias) => {
+      return headerKeys.has(
+          clean_(alias).toLowerCase().replace(/\s+/g, '_'));
+    });
+
+    if (matchesCanonicalHeader) {
+      fields[field] = true;
+    }
+  });
+
+  return fields;
+}
+
+function isEditorFieldAllowedForFamily_(field, family) {
+  const inkFields = [
+    'inkSize',
+    'baseColors',
+    'glitterColors',
+    'sheenColors',
+  ];
+  const glitterPotionFields = [
+    'glitterPotionColor',
+    'glitterPotionSize',
+  ];
+  const penFields = [
+    'penBaseColor',
+    'penSize',
+  ];
+
+  if (inkFields.indexOf(field) !== -1) {
+    return family === 'INK';
+  }
+
+  if (glitterPotionFields.indexOf(field) !== -1) {
+    return family === 'GLITTER_POTION';
+  }
+
+  if (penFields.indexOf(field) !== -1) {
+    return family === 'PEN';
+  }
+
+  return true;
+}
+
 function getEditorItemTypeCode_(productType) {
   const key = normalizeEditorProductTypeKey_(productType);
 
@@ -250,6 +385,15 @@ function buildEditorItemId_(productType, sku) {
   return typeCode && normalizedSku
     ? `${typeCode}-${normalizedSku}`
     : '';
+}
+
+function buildEditorItemIdForSheet_(sheetName, productType, sku) {
+  const family = getEditorSheetFamily_(sheetName);
+  const effectiveItemType = family === 'GLITTER_POTION'
+    ? 'GP'
+    : family || productType;
+
+  return buildEditorItemId_(effectiveItemType, sku);
 }
 
 function resolveEditorTaxonomyCategoryId_(productType) {
@@ -283,6 +427,7 @@ function isCatalogSourceSheet_(sheet) {
 
   return (
     !name.startsWith('Shopify ') &&
+    !name.startsWith('__MYK_REVIEW_') &&
     EDITOR_RESERVED_SHEET_NAMES.indexOf(name) === -1
   );
 }
@@ -302,6 +447,10 @@ function getEditorOptions() {
       EDITOR_DEFAULT_OPTIONS.glitterPotionColors.slice(),
     glitterPotionSizes:
       EDITOR_DEFAULT_OPTIONS.glitterPotionSizes.slice(),
+    penBaseColors:
+      EDITOR_DEFAULT_OPTIONS.penBaseColors.slice(),
+    penSizes:
+      EDITOR_DEFAULT_OPTIONS.penSizes.slice(),
   };
 
   const fieldMap = {
@@ -315,6 +464,8 @@ function getEditorOptions() {
     sheenColors: 'sheenColors',
     glitterPotionColors: 'glitterPotionColor',
     glitterPotionSizes: 'glitterPotionSize',
+    penBaseColors: 'penBaseColor',
+    penSizes: 'penSize',
   };
 
   spreadsheet.getSheets().forEach((sheet) => {
@@ -328,9 +479,15 @@ function getEditorOptions() {
 
     const rows = sheet.getDataRange().getDisplayValues();
     const index = getSheetIndex_(sheet);
+    const family = getEditorSheetFamily_(sheet.getName());
 
     Object.keys(fieldMap).forEach((optionKey) => {
       const field = fieldMap[optionKey];
+
+      if (!isEditorFieldAllowedForFamily_(field, family)) {
+        return;
+      }
+
       const column = aliasColumn_(index, APP.sheetAliases[field]);
 
       if (column < 0) {
@@ -662,6 +819,9 @@ function blankEditorModel() {
       writeInventory: true,
       glitterPotionColor: '',
       glitterPotionSize: '',
+      penBaseColor: '',
+      penSize: '',
+      sheetOption: '',
       optionValues: [],
     }],
 
@@ -678,9 +838,11 @@ function blankEditorModel() {
 
 function validateEditorModel_(model) {
   const errors = {};
+  const sheetFamily = getEditorSheetFamily_(
+      model.targetSheetName);
   const isGlitterPotion =
-    clean_(model.targetSheetName) === '閃粉' ||
-    normalize_(model.productType) === 'GLITTER POTION';
+    sheetFamily === 'GLITTER_POTION';
+  const isPen = sheetFamily === 'PEN';
 
   APP.requiredProductFields.forEach((key) => {
     if (!clean_(model[key])) {
@@ -737,6 +899,14 @@ function validateEditorModel_(model) {
     if (isGlitterPotion && !clean_(variant.glitterPotionSize)) {
       errors[`variant_${index}_glitterPotionSize`] = 'Required';
     }
+
+    if (isPen && !clean_(variant.penBaseColor)) {
+      errors[`variant_${index}_penBaseColor`] = 'Required';
+    }
+
+    if (isPen && !clean_(variant.penSize)) {
+      errors[`variant_${index}_penSize`] = 'Required';
+    }
   });
 
   return errors;
@@ -750,33 +920,99 @@ function saveCatalogProduct(model) {
   model.glitterColors = normalizeEditorList_(model.glitterColors);
   model.sheenColors = normalizeEditorList_(model.sheenColors);
   model.status = clean_(model.status || 'DRAFT').toUpperCase();
+  const sheetFamily = getEditorSheetFamily_(
+      model.targetSheetName);
+
+  if (sheetFamily !== 'INK') {
+    model.inkSize = '';
+    model.baseColors = [];
+    model.glitterColors = [];
+    model.sheenColors = [];
+  }
 
   (model.variants || []).forEach((variant) => {
     variant.glitterPotionColor = clean_(
         variant.glitterPotionColor);
     variant.glitterPotionSize = clean_(
         variant.glitterPotionSize);
+    variant.penBaseColor = clean_(
+        variant.penBaseColor);
+    variant.penSize = clean_(
+        variant.penSize);
+    variant.sheetOption = clean_(
+        variant.sheetOption);
+
+    const managedOptionNames = [
+      'OPTION',
+      'GLITTER POTION COLOR',
+      'GLITTER POTION SIZE',
+      'PEN BASE COLOR',
+      'PEN SIZE',
+    ];
+
+    const existingDirectOption = (variant.optionValues || []).find(
+        (option) => {
+          return normalize_(option && option.optionName) === 'OPTION';
+        });
+
+    variant.sheetOption =
+      variant.sheetOption ||
+      clean_(existingDirectOption && existingDirectOption.name);
 
     const otherOptions = (variant.optionValues || []).filter((option) => {
       const name = normalize_(option && option.optionName);
-      return (
-        name !== 'GLITTER POTION COLOR' &&
-        name !== 'GLITTER POTION SIZE'
-      );
+      return managedOptionNames.indexOf(name) === -1;
     });
 
-    if (variant.glitterPotionColor) {
+    if (variant.sheetOption) {
+      otherOptions.push({
+        optionName: 'Option',
+        name: variant.sheetOption,
+      });
+    }
+
+    if (
+      sheetFamily === 'GLITTER_POTION' &&
+      variant.glitterPotionColor
+    ) {
       otherOptions.push({
         optionName: 'Glitter Potion Color',
         name: variant.glitterPotionColor,
       });
     }
 
-    if (variant.glitterPotionSize) {
+    if (
+      sheetFamily === 'GLITTER_POTION' &&
+      variant.glitterPotionSize
+    ) {
       otherOptions.push({
         optionName: 'Glitter Potion Size',
         name: variant.glitterPotionSize,
       });
+    }
+
+    if (sheetFamily === 'PEN' && variant.penBaseColor) {
+      otherOptions.push({
+        optionName: 'Pen Base Color',
+        name: variant.penBaseColor,
+      });
+    }
+
+    if (sheetFamily === 'PEN' && variant.penSize) {
+      otherOptions.push({
+        optionName: 'Pen Size',
+        name: variant.penSize,
+      });
+    }
+
+    if (sheetFamily !== 'GLITTER_POTION') {
+      variant.glitterPotionColor = '';
+      variant.glitterPotionSize = '';
+    }
+
+    if (sheetFamily !== 'PEN') {
+      variant.penBaseColor = '';
+      variant.penSize = '';
     }
 
     variant.optionValues = otherOptions;
@@ -801,7 +1037,8 @@ function saveCatalogProduct(model) {
   model.collection = deriveCollectionName_(model.title);
 
   const wasNewEditorProduct = !clean_(model.id);
-  const generatedEditorItemId = buildEditorItemId_(
+  const generatedEditorItemId = buildEditorItemIdForSheet_(
+      model.targetSheetName,
       model.productType,
       model.variants && model.variants[0]
         ? model.variants[0].sku
@@ -1065,23 +1302,41 @@ function saveCatalogProduct(model) {
       candidate.editorResult = 'INVENTORY_NOT_CHANGED';
     }
 
-    if (
-      candidate.glitterPotionColor ||
-      candidate.glitterPotionSize
-    ) {
+    const hasManagedVariantMetadata =
+      (
+        sheetFamily === 'GLITTER_POTION' &&
+        (
+          candidate.glitterPotionColor ||
+          candidate.glitterPotionSize
+        )
+      ) ||
+      (
+        sheetFamily === 'PEN' &&
+        (
+          candidate.penBaseColor ||
+          candidate.penSize
+        )
+      );
+
+    if (hasManagedVariantMetadata) {
       try {
         setShopifyVariantMetafields_(
             accessToken,
             candidate.id,
             {
               itemId:
-                buildEditorItemId_(
+                buildEditorItemIdForSheet_(
+                    model.targetSheetName,
                     model.productType,
                     candidate.sku),
               glitterPotionColor:
                 candidate.glitterPotionColor,
               glitterPotionSize:
                 candidate.glitterPotionSize,
+              penBaseColor:
+                candidate.penBaseColor,
+              penSize:
+                candidate.penSize,
             });
       } catch (error) {
         warnings.push(
@@ -1098,23 +1353,33 @@ function saveCatalogProduct(model) {
     savedVariants;
 
   try {
+    const productMetafieldData = {
+      itemId: clean_(model.itemId),
+      skipItemId: model.variants.some((variant) => {
+        return Boolean(
+            variant.glitterPotionColor ||
+            variant.glitterPotionSize ||
+            variant.penBaseColor ||
+            variant.penSize);
+      }),
+      colorMode: sheetFamily,
+      chineseName: clean_(model.chineseName),
+      storageLocation: clean_(model.storageLocation),
+    };
+
+    if (sheetFamily === 'INK') {
+      Object.assign(productMetafieldData, {
+        inkSize: clean_(model.inkSize),
+        baseColors: model.baseColors,
+        glitterColors: model.glitterColors,
+        sheenColors: model.sheenColors,
+      });
+    }
+
     setShopifyProductMetafields_(
         accessToken,
         productId,
-        {
-          itemId: clean_(model.itemId),
-          skipItemId: model.variants.some((variant) => {
-            return Boolean(
-                variant.glitterPotionColor ||
-                variant.glitterPotionSize);
-          }),
-          chineseName: clean_(model.chineseName),
-          storageLocation: clean_(model.storageLocation),
-          inkSize: clean_(model.inkSize),
-          baseColors: model.baseColors,
-          glitterColors: model.glitterColors,
-          sheenColors: model.sheenColors,
-        });
+        productMetafieldData);
   } catch (error) {
     warnings.push(
         `METAFIELDS_FAILED: ${error.message}`);
@@ -1286,12 +1551,16 @@ function applySourceFieldsToProduct_(product, sheet, rowNumber) {
       .getDisplayValues()[0];
 
   const index = getSheetIndex_(sheet);
+  const family = getEditorSheetFamily_(sheet.getName());
   const scalarFields = [
     'itemId',
     'chineseName',
     'storageLocation',
-    'inkSize',
   ];
+
+  if (family === 'INK') {
+    scalarFields.push('inkSize');
+  }
 
   scalarFields.forEach((field) => {
     if (!clean_(product[field])) {
@@ -1303,17 +1572,143 @@ function applySourceFieldsToProduct_(product, sheet, rowNumber) {
     }
   });
 
-  [
-    'baseColors',
-    'glitterColors',
-    'sheenColors',
-  ].forEach((field) => {
-    if (!normalizeEditorList_(product[field]).length) {
-      product[field] = normalizeEditorList_(
-          getAliasedSheetValue_(
-              values,
-              index,
-              field));
+  if (family === 'INK') {
+    [
+      'baseColors',
+      'glitterColors',
+      'sheenColors',
+    ].forEach((field) => {
+      if (!normalizeEditorList_(product[field]).length) {
+        product[field] = normalizeEditorList_(
+            getAliasedSheetValue_(
+                values,
+                index,
+                field));
+      }
+    });
+  }
+
+  return product;
+}
+
+function setEditorVariantOptionValue_(variant, optionName, value) {
+  const optionValue = clean_(value);
+
+  if (!optionValue) {
+    return;
+  }
+
+  variant.optionValues = (variant.optionValues || []).filter((option) => {
+    return normalize_(option && option.optionName) !==
+      normalize_(optionName);
+  });
+  variant.optionValues.push({
+    optionName,
+    name: optionValue,
+  });
+}
+
+function applySourceVariantFieldsToProduct_(
+    product,
+    sheet,
+    sourceRows) {
+  if (!sheet || sheet.getLastRow() < 2) {
+    return product;
+  }
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const index = getSheetIndex_(sheet);
+  const family = getEditorSheetFamily_(sheet.getName());
+  const relevantRows = (sourceRows || []).filter((sourceRow) => {
+    return sourceRow.sheetName === sheet.getName();
+  });
+
+  relevantRows.forEach((sourceRow) => {
+    const rowNumber = Number(sourceRow.row);
+
+    if (rowNumber < 2 || rowNumber > values.length) {
+      return;
+    }
+
+    const row = values[rowNumber - 1];
+    const sourceSku = clean_(sourceRow.sku).toUpperCase();
+    const variant = (product.variants || []).find((candidate) => {
+      return (
+        sourceSku &&
+        clean_(candidate.sku).toUpperCase() === sourceSku
+      );
+    }) || (
+      (product.variants || []).length === 1
+        ? product.variants[0]
+        : null
+    );
+
+    if (!variant) {
+      return;
+    }
+
+    const sourceOption = getAliasedSheetValue_(
+        row,
+        index,
+        'option');
+
+    if (!clean_(variant.sheetOption) && sourceOption) {
+      variant.sheetOption = sourceOption;
+      setEditorVariantOptionValue_(variant, 'Option', sourceOption);
+    }
+
+    if (family === 'GLITTER_POTION') {
+      const color = getAliasedSheetValue_(
+          row,
+          index,
+          'glitterPotionColor');
+      const size = getAliasedSheetValue_(
+          row,
+          index,
+          'glitterPotionSize');
+
+      if (!clean_(variant.glitterPotionColor) && color) {
+        variant.glitterPotionColor = color;
+        setEditorVariantOptionValue_(
+            variant,
+            'Glitter Potion Color',
+            color);
+      }
+
+      if (!clean_(variant.glitterPotionSize) && size) {
+        variant.glitterPotionSize = size;
+        setEditorVariantOptionValue_(
+            variant,
+            'Glitter Potion Size',
+            size);
+      }
+    }
+
+    if (family === 'PEN') {
+      const color = getAliasedSheetValue_(
+          row,
+          index,
+          'penBaseColor');
+      const size = getAliasedSheetValue_(
+          row,
+          index,
+          'penSize');
+
+      if (!clean_(variant.penBaseColor) && color) {
+        variant.penBaseColor = color;
+        setEditorVariantOptionValue_(
+            variant,
+            'Pen Base Color',
+            color);
+      }
+
+      if (!clean_(variant.penSize) && size) {
+        variant.penSize = size;
+        setEditorVariantOptionValue_(
+            variant,
+            'Pen Size',
+            size);
+      }
     }
   });
 
@@ -1358,6 +1753,11 @@ function hydrateEditorProduct_(product) {
         product,
         sourceSheet,
         Number(firstSource.row));
+
+    applySourceVariantFieldsToProduct_(
+        product,
+        sourceSheet,
+        product.sourceRows);
   } else {
     const targetSheet =
       getDefaultEditorTargetSheet_(spreadsheet);
@@ -1494,39 +1894,45 @@ function appendSourceRow_(ss, model, variant) {
   }
 
   if (sheet.getLastColumn() === 0) {
-    const headers = [
-      'ID',
-      'English Name',
-      'Chinese Name',
-      'Brand',
-      'Collection',
-      'Product Type',
-      'Status',
-      'Storage Location',
-      'Ink Size',
-      'Ink Base Color',
-      'Ink Glitter Color',
-      'Ink Sheen Color',
-      'Glitter Potion Color',
-      'Glitter Potion Size',
-      'Handle',
-      'SKU',
-      'Price',
-      'Barcode',
-      'Inventory',
-      'Stock',
-      'Cost',
-      'Purchased',
-      'Sold',
-      'Desc',
-      'Tags',
-      'Image URLs',
-      'Shopify Product GID',
-      'Shopify Variant GID',
-      'Shopify Taxonomy ID',
-      'Last Updated',
-      'Upload Result',
-    ];
+    const family = getEditorSheetFamily_(sheetName);
+    const headers = family
+      ? getEditorSourceHeaders_(sheetName)
+      : [
+        'ID',
+        'English Name',
+        'Chinese Name',
+        'Option',
+        'Brand',
+        'Collection',
+        'Product Type',
+        'Status',
+        'Storage Location',
+        'Ink Size',
+        'Ink Base Color',
+        'Ink Glitter Color',
+        'Ink Sheen Color',
+        'Glitter Potion Color',
+        'Glitter Potion Size',
+        'Pen Base Color',
+        'Pen Size',
+        'Handle',
+        'SKU',
+        'Price',
+        'Barcode',
+        'Inventory',
+        'Stock',
+        'Cost',
+        'Purchased',
+        'Sold',
+        'Desc',
+        'Tags',
+        'Image URLs',
+        'Shopify Product GID',
+        'Shopify Variant GID',
+        'Shopify Taxonomy ID',
+        'Last Updated',
+        'Upload Result',
+      ];
 
     sheet
         .getRange(1, 1, 1, headers.length)
@@ -1571,12 +1977,31 @@ function writeMappedRow_(
       return normalize_(option.optionName) ===
         'GLITTER POTION SIZE';
     }) || {}).name);
+  const penBaseColor =
+    clean_(variant.penBaseColor) ||
+    clean_((variantOptions.find((option) => {
+      return normalize_(option.optionName) === 'PEN BASE COLOR';
+    }) || {}).name);
+  const penSize =
+    clean_(variant.penSize) ||
+    clean_((variantOptions.find((option) => {
+      return normalize_(option.optionName) === 'PEN SIZE';
+    }) || {}).name);
+  const sheetOption =
+    clean_(variant.sheetOption) ||
+    clean_((variantOptions.find((option) => {
+      return normalize_(option.optionName) === 'OPTION';
+    }) || {}).name);
   const values = {
     itemId:
-      buildEditorItemId_(model.productType, variant.sku) ||
+      buildEditorItemIdForSheet_(
+          sheet.getName(),
+          model.productType,
+          variant.sku) ||
       clean_(model.itemId),
     title: clean_(model.title),
     chineseName: clean_(model.chineseName),
+    option: sheetOption,
     handle: clean_(model.handle),
     vendor: clean_(model.vendor),
     collection: deriveCollectionName_(model.title),
@@ -1592,6 +2017,8 @@ function writeMappedRow_(
     sheenColors: normalizeEditorList_(model.sheenColors).join(', '),
     glitterPotionColor,
     glitterPotionSize,
+    penBaseColor,
+    penSize,
     descriptionHtml: clean_(model.descriptionHtml),
     tags: normalizeEditorTags_(model.tags).join(', '),
     sku: clean_(variant.sku),
@@ -1628,12 +2055,35 @@ function writeMappedRow_(
         : Number(variant.inventory);
   }
 
+  const family = getEditorSheetFamily_(sheet.getName());
+  const canonicalFields = family
+    ? getEditorCanonicalSourceFields_(sheet.getName())
+    : {};
+
   Object.keys(values).forEach((field) => {
     if (!APP.sheetAliases[field]) {
       return;
     }
 
-    const col = ensureAliasColumn_(sheet, index, field);
+    if (
+      family &&
+      !isEditorFieldAllowedForFamily_(field, family)
+    ) {
+      return;
+    }
+
+    let col = aliasColumn_(index, APP.sheetAliases[field]);
+
+    if (col < 0) {
+      if (family) {
+        if (!canonicalFields[field]) {
+          return;
+        }
+      }
+
+      col = ensureAliasColumn_(sheet, index, field);
+    }
+
     sheet.getRange(rowNumber, col + 1).setValue(values[field]);
   });
 }
@@ -2075,6 +2525,21 @@ function normalizeShopifyProduct_(product) {
                   variant,
                   'Glitter Potion Size'),
 
+            penBaseColor:
+              getSelectedOptionValue_(
+                  variant,
+                  'Pen Base Color'),
+
+            penSize:
+              getSelectedOptionValue_(
+                  variant,
+                  'Pen Size'),
+
+            sheetOption:
+              getSelectedOptionValue_(
+                  variant,
+                  'Option'),
+
             inventoryItemId:
               variant.inventoryItem &&
               variant.inventoryItem.id ||
@@ -2414,4 +2879,12 @@ function showNewProductEditor() {
   const html = HtmlService.createTemplateFromFile('Editor');
   html.mode = 'new';
   SpreadsheetApp.getUi().showModalDialog(html.evaluate().setWidth(1180).setHeight(760), 'New Shopify Product');
+}
+
+function showMtoBulkEditor() {
+  const html = HtmlService.createTemplateFromFile('Editor');
+  html.mode = 'mto-bulk';
+  SpreadsheetApp.getUi().showModalDialog(
+      html.evaluate().setWidth(1240).setHeight(780),
+      'Bulk copy to MTO');
 }

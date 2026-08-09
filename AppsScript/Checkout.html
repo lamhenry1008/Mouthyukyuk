@@ -1,5 +1,6 @@
 
 
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -300,6 +301,17 @@
     .badge.cancelled {
       color: #7b2830;
       background: #fce8e6;
+    }
+
+    .header-badges {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .badge.market {
+      color: #7a3e00;
+      background: #fff1d6;
     }
 
     .editor-pane {
@@ -722,7 +734,7 @@
     .catalog-modal {
       display: flex;
       flex-direction: column;
-      width: min(930px, 96vw);
+      width: min(1040px, 96vw);
       height: min(650px, 90vh);
       overflow: hidden;
       border-radius: 10px;
@@ -756,20 +768,20 @@
     }
 
     .catalog-product-column {
-      width: 34%;
+      width: 40%;
     }
 
     .catalog-variant-column {
-      width: 22%;
+      width: 18%;
     }
 
     .catalog-sku-column {
-      width: 19%;
+      width: 16%;
     }
 
     .catalog-price-column,
     .catalog-stock-column {
-      width: 10%;
+      width: 9%;
     }
 
     .catalog-add-column {
@@ -780,6 +792,69 @@
       padding: 36px 16px;
       color: var(--muted);
       text-align: center;
+    }
+
+    .catalog-product-summary {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .catalog-thumbnail {
+      display: flex;
+      width: 52px;
+      height: 52px;
+      overflow: hidden;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--soft-line);
+      border-radius: 6px;
+      background: #f5f6f7;
+      color: var(--muted);
+      font-size: 9px;
+      text-align: center;
+    }
+
+    .catalog-thumbnail img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .catalog-product-copy {
+      min-width: 0;
+    }
+
+    .catalog-product-title,
+    .catalog-product-chinese,
+    .catalog-product-vendor {
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .catalog-product-title {
+      font-weight: 700;
+    }
+
+    .catalog-product-chinese {
+      margin-top: 2px;
+      font-size: 11px;
+    }
+
+    .catalog-product-vendor {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    @media (max-width: 700px) {
+      .catalog-table {
+        min-width: 800px;
+      }
     }
 
     @media (max-width: 900px) {
@@ -832,7 +907,10 @@
           <h1 id="editor-title">New checkout</h1>
           <div id="editor-subtitle" class="editor-subtitle">The order will be recorded in 訂單紀錄.</div>
         </div>
-        <span id="order-status-badge" class="badge">Active</span>
+        <div class="header-badges">
+          <span id="checkout-mode-badge" class="badge market" hidden>MTO32</span>
+          <span id="order-status-badge" class="badge">Active</span>
+        </div>
       </div>
 
       <section class="panel">
@@ -851,6 +929,15 @@
             <div id="field-status" class="field">
               <label for="order-status">Status</label>
               <input id="order-status" readonly>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="field-checkoutMode" class="field">
+              <label for="checkout-mode">Checkout mode</label>
+              <select id="checkout-mode">
+                <option value="STANDARD">Shopify catalog</option>
+                <option value="MTO32">MTO 32 Market</option>
+              </select>
               <div class="field-error"></div>
             </div>
 
@@ -910,8 +997,8 @@
       <section id="cart-panel" class="panel cart-panel">
         <div class="panel-header">
           <div>
-            <div class="panel-title">Products and variants</div>
-            <div class="panel-help">
+            <div id="cart-panel-title" class="panel-title">Products and variants</div>
+            <div id="cart-panel-help" class="panel-help">
               Add exact Shopify variants. Adding the same variant again increases its quantity.
             </div>
           </div>
@@ -986,7 +1073,7 @@
             id="catalog-search"
             type="search"
             aria-label="Search Shopify catalog"
-            placeholder="Search title, handle, or exact SKU"
+            placeholder="Search English/Chinese name, brand, handle, or SKU"
           >
           <button id="catalog-search-button" class="primary" type="button">Search</button>
         </div>
@@ -997,16 +1084,18 @@
           <thead>
             <tr>
               <th class="catalog-product-column">Product</th>
-              <th class="catalog-variant-column">Variant</th>
-              <th class="catalog-sku-column">SKU</th>
+              <th id="catalog-variant-heading" class="catalog-variant-column">Variant</th>
+              <th id="catalog-sku-heading" class="catalog-sku-column">SKU</th>
               <th class="catalog-price-column money-cell">Price</th>
-              <th class="catalog-stock-column money-cell">Available</th>
+              <th id="catalog-stock-heading" class="catalog-stock-column money-cell">Available</th>
               <th class="catalog-add-column"></th>
             </tr>
           </thead>
           <tbody id="catalog-results"></tbody>
         </table>
-        <div id="catalog-message" class="catalog-message">Search Shopify to select an exact variant.</div>
+        <div id="catalog-message" class="catalog-message">
+          Search by English/Chinese name, brand, handle, or SKU.
+        </div>
       </div>
     </section>
   </div>
@@ -1025,6 +1114,10 @@
     const MAX_IMAGE_DIMENSION = 1600;
     const MAX_IMAGE_BYTES = Math.floor(1.5 * 1024 * 1024);
     const MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
+    const CHECKOUT_MODES = Object.freeze({
+      standard: 'STANDARD',
+      mto: 'MTO32',
+    });
 
     let bootstrap = {};
     let order = null;
@@ -1066,6 +1159,32 @@
     function isCancelled(status) {
       const normalized = clean(status).toUpperCase();
       return normalized === 'CANCELLED' || normalized === 'CANCELED';
+    }
+
+    function normalizeCheckoutMode(value) {
+      return clean(value).toUpperCase() === CHECKOUT_MODES.mto
+        ? CHECKOUT_MODES.mto
+        : CHECKOUT_MODES.standard;
+    }
+
+    function isMtoMode(value) {
+      return normalizeCheckoutMode(value) === CHECKOUT_MODES.mto;
+    }
+
+    function catalogItemKey(item) {
+      const source = item || {};
+      const mode = normalizeCheckoutMode(
+        source.catalogMode || source.checkoutMode || source.mode ||
+        order && order.checkoutMode
+      );
+
+      if (isMtoMode(mode)) {
+        const itemId = clean(source.marketItemId || source.sourceItemId || source.sku);
+        return itemId ? `MTO32:${itemId.toUpperCase()}` : '';
+      }
+
+      const variantId = clean(source.variantId || source.id);
+      return variantId ? `SHOPIFY:${variantId}` : '';
     }
 
     function safeExternalUrl(value) {
@@ -1204,6 +1323,15 @@
       const variantTitle = clean(source.variantTitle || source.optionTitle || source.variantName);
 
       return {
+        catalogMode: normalizeCheckoutMode(
+          source.catalogMode || source.checkoutMode || source.mode
+        ),
+        marketItemId: clean(
+          source.marketItemId || source.sourceItemId || source.mtoItemId
+        ),
+        sourceLocation: clean(source.sourceLocation || source.location),
+        chineseName: clean(source.chineseName),
+        imageUrl: safeExternalUrl(source.imageUrl),
         productId: clean(source.productId),
         variantId: clean(source.variantId || source.id),
         inventoryItemId: clean(source.inventoryItemId),
@@ -1214,6 +1342,9 @@
         quantity: source.quantity == null ? 1 : source.quantity,
         unitPrice: source.unitPrice == null ? numberOr(source.price, 0) : source.unitPrice,
         tracked: source.tracked !== false,
+        liveAvailable: source.liveAvailable == null
+          ? ''
+          : source.liveAvailable,
         available: source.available == null
           ? (source.inventoryQuantity == null ? '' : source.inventoryQuantity)
           : source.available,
@@ -1255,9 +1386,13 @@
 
     function normalizeOrder(source) {
       const data = source || {};
+      const checkoutMode = normalizeCheckoutMode(
+        data.checkoutMode || data.mode || data.orderMode
+      );
 
       return {
         orderId: clean(data.orderId || data.id),
+        checkoutMode,
         status: clean(data.status || bootstrap.defaultStatus || 'ACTIVE').toUpperCase(),
         version: integerOr(data.version, 0),
         draftKey: clean(data.draftKey),
@@ -1269,7 +1404,13 @@
         customerEmail: clean(data.customerEmail),
         paymentMethod: clean(data.paymentMethod || bootstrap.defaultPaymentMethod),
         notes: clean(data.notes),
-        items: Array.isArray(data.items) ? data.items.map(normalizeItem) : [],
+        items: Array.isArray(data.items)
+          ? data.items.map((item) => {
+            const normalized = normalizeItem(item || {});
+            normalized.catalogMode = checkoutMode;
+            return normalized;
+          })
+          : [],
         receiptImages: Array.isArray(data.receiptImages)
           ? data.receiptImages.map(normalizeReceiptImage)
           : [],
@@ -1280,10 +1421,13 @@
       };
     }
 
-    function createBlankOrder() {
+    function createBlankOrder(mode) {
       const template = bootstrap.blankOrder || bootstrap.order || {};
       const blank = normalizeOrder(template);
       blank.orderId = '';
+      blank.checkoutMode = normalizeCheckoutMode(
+        mode || blank.checkoutMode
+      );
       blank.status = clean(bootstrap.defaultStatus || blank.status || 'ACTIVE').toUpperCase();
       blank.version = 0;
       blank.transactionDate = formatDateForInput(new Date());
@@ -1437,6 +1581,7 @@
       populateCashierChoices(order.cashier);
       elements.orderId.value = order.orderId;
       elements.orderStatus.value = order.status;
+      elements.checkoutMode.value = normalizeCheckoutMode(order.checkoutMode);
       elements.transactionDate.value = localDateTimeValue(order.transactionDate);
       elements.customerName.value = order.customerName;
       elements.customerPhone.value = order.customerPhone;
@@ -1446,6 +1591,7 @@
     }
 
     function syncOrderFromForm() {
+      order.checkoutMode = normalizeCheckoutMode(elements.checkoutMode.value);
       order.transactionDate = elements.transactionDate.value;
       order.cashier = elements.cashier.value === OTHER_CASHIER_VALUE
         ? clean(elements.cashierOther.value)
@@ -1466,6 +1612,7 @@
 
       return JSON.stringify({
         orderId: order.orderId,
+        checkoutMode: normalizeCheckoutMode(order.checkoutMode),
         transactionDate: order.transactionDate,
         cashier: order.cashier,
         customerName: order.customerName,
@@ -1474,6 +1621,7 @@
         paymentMethod: order.paymentMethod,
         notes: order.notes,
         items: order.items.map((item) => ({
+          marketItemId: item.marketItemId,
           variantId: item.variantId,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
@@ -1516,12 +1664,29 @@
 
     function updateOrderHeader() {
       const editMode = Boolean(order.orderId);
-      elements.editorTitle.textContent = editMode ? `Edit ${order.orderId}` : 'New checkout';
+      const mtoMode = isMtoMode(order.checkoutMode);
+      elements.editorTitle.textContent = editMode
+        ? `Edit ${order.orderId}`
+        : (mtoMode ? 'New MTO32 checkout' : 'New checkout');
       elements.editorSubtitle.textContent = editMode
-        ? 'Changes update the existing receipt and 訂單紀錄 rows.'
-        : 'The order will be recorded in 訂單紀錄.';
+        ? (mtoMode
+          ? 'Changes update this receipt and MTO Item Left / Sold.'
+          : 'Changes update the existing receipt, source inventory, and 訂單紀錄 rows.')
+        : (mtoMode
+          ? 'Items come only from MTO 32 Summary. Shopify inventory is not changed.'
+          : 'The order will be recorded in 訂單紀錄.');
       elements.orderStatusBadge.textContent = order.status || 'ACTIVE';
       elements.orderStatusBadge.classList.toggle('cancelled', isCancelled(order.status));
+      elements.checkoutModeBadge.hidden = !mtoMode;
+      elements.cartPanelTitle.textContent = mtoMode
+        ? 'MTO32 market items'
+        : 'Products and variants';
+      elements.cartPanelHelp.textContent = mtoMode
+        ? 'Add items from MTO 32 Summary. Left and Sold update when the receipt is saved.'
+        : 'Add exact Shopify variants. Adding the same variant again increases its quantity.';
+      elements.addProductButton.textContent = mtoMode
+        ? 'Add MTO item'
+        : 'Add product';
       const cancelled = isCancelled(order.status);
       elements.cancelOrderButton.disabled = !editMode || cancelled;
       elements.createdAt.textContent = displayDate(order.createdAt);
@@ -1530,6 +1695,7 @@
       updateReceiptLink();
       highlightSelectedOrder();
       setCancelledReadOnly(cancelled);
+      elements.checkoutMode.disabled = editMode || cancelled;
     }
 
     function setCancelledReadOnly(cancelled) {
@@ -1561,6 +1727,42 @@
             control.disabled = true;
           });
       }
+    }
+
+    function changeCheckoutMode() {
+      const selectedMode = normalizeCheckoutMode(elements.checkoutMode.value);
+      const currentMode = normalizeCheckoutMode(order.checkoutMode);
+
+      if (order.orderId) {
+        elements.checkoutMode.value = currentMode;
+        setStatus('A saved order cannot change checkout mode.', 'error');
+        return;
+      }
+
+      if (selectedMode === currentMode) {
+        return;
+      }
+
+      if (
+        order.items.length > 0 &&
+        !window.confirm('Changing checkout mode will remove every item in the cart. Continue?')
+      ) {
+        elements.checkoutMode.value = currentMode;
+        return;
+      }
+
+      order.checkoutMode = selectedMode;
+      order.items = [];
+      catalogVariants = [];
+      clearFieldError('items');
+      renderCart();
+      updateOrderHeader();
+      setStatus(
+        isMtoMode(selectedMode)
+          ? 'MTO32 Market mode enabled.'
+          : 'Shopify catalog mode enabled.',
+        'success'
+      );
     }
 
     function updateReceiptLink() {
@@ -1636,11 +1838,22 @@
         : 'Default variant';
       const availability = document.createElement('span');
       availability.className = 'availability';
-      const availableNumber = Number(item.available);
+      const displayedAvailable =
+        clean(item.liveAvailable) === ''
+          ? item.available
+          : item.liveAvailable;
+      const availableNumber = Number(displayedAvailable);
       availability.classList.toggle('low', Number.isFinite(availableNumber) && availableNumber <= 2);
-      availability.textContent = clean(item.available) === ''
-        ? 'Availability unknown'
-        : `Available: ${item.available}`;
+      const availabilityLabel = isMtoMode(order.checkoutMode)
+        ? 'MTO left'
+        : 'Available';
+      availability.textContent = clean(displayedAvailable) === ''
+        ? `${availabilityLabel} unknown`
+        : `${availabilityLabel}: ${displayedAvailable}`;
+
+      if (isMtoMode(order.checkoutMode) && item.sourceLocation) {
+        availability.textContent += ` · ${item.sourceLocation}`;
+      }
       productCell.append(productTitle, variantTitle, availability);
 
       const skuCell = document.createElement('td');
@@ -2039,6 +2252,32 @@
     }
 
     function openCatalog() {
+      const mtoMode = isMtoMode(order.checkoutMode);
+      catalogVariants = [];
+      elements.catalogResults.replaceChildren();
+      elements.catalogTitle.textContent = mtoMode
+        ? 'Add MTO32 item'
+        : 'Add Shopify variant';
+      elements.catalogVariantHeading.textContent = mtoMode
+        ? 'Option'
+        : 'Variant';
+      elements.catalogSkuHeading.textContent = mtoMode
+        ? 'MTO Item ID'
+        : 'SKU';
+      elements.catalogStockHeading.textContent = mtoMode
+        ? 'MTO Item Left'
+        : 'Available';
+      elements.catalogSearch.placeholder = mtoMode
+        ? 'Search MTO ID, English/Chinese name, option, or location'
+        : 'Search English/Chinese name, brand, handle, or SKU';
+      elements.catalogSearch.setAttribute(
+        'aria-label',
+        mtoMode ? 'Search MTO 32 Summary' : 'Search Shopify catalog'
+      );
+      elements.catalogMessage.hidden = false;
+      elements.catalogMessage.textContent = mtoMode
+        ? 'Search items from MTO 32 Summary only.'
+        : 'Search by English/Chinese name, brand, handle, or SKU.';
       elements.catalogBackdrop.classList.add('open');
       elements.catalogBackdrop.setAttribute('aria-hidden', 'false');
       elements.catalogSearch.focus();
@@ -2055,15 +2294,22 @@
 
       if (!query) {
         elements.catalogMessage.hidden = false;
-        elements.catalogMessage.textContent = 'Enter a product title, handle, or SKU.';
+        elements.catalogMessage.textContent = isMtoMode(order.checkoutMode)
+          ? 'Enter an MTO Item ID, name, option, or location.'
+          : 'Enter an English/Chinese name, brand, handle, or SKU.';
         elements.catalogSearch.focus();
         return;
       }
 
-      setBusy(true, 'Searching Shopify catalog…');
+      const mtoMode = isMtoMode(order.checkoutMode);
+      setBusy(true, mtoMode ? 'Searching MTO 32 Summary…' : 'Searching Shopify catalog…');
 
       try {
-        const result = await serverCall('checkoutSearchCatalog', query);
+        const result = await serverCall(
+          'checkoutSearchCatalog',
+          query,
+          normalizeCheckoutMode(order.checkoutMode)
+        );
         catalogVariants = normalizeCatalogResults(result);
         renderCatalogResults();
         setStatus(`${catalogVariants.length} variant(s) found.`);
@@ -2103,17 +2349,33 @@
       const parent = product || {};
 
       return {
+        catalogMode: normalizeCheckoutMode(
+          source.catalogMode || source.checkoutMode || source.mode ||
+          parent.catalogMode || parent.checkoutMode || parent.mode
+        ),
+        marketItemId: clean(
+          source.marketItemId || source.sourceItemId || source.mtoItemId ||
+          parent.marketItemId || parent.sourceItemId || parent.mtoItemId
+        ),
+        sourceLocation: clean(
+          source.sourceLocation || source.location || parent.sourceLocation
+        ),
         productId: clean(source.productId || parent.productId || parent.id),
         variantId: clean(source.variantId || source.id),
         inventoryItemId: clean(source.inventoryItemId),
         sku: clean(source.sku),
         productTitle: clean(source.productTitle || parent.productTitle || parent.title || source.title),
+        chineseName: clean(source.chineseName || parent.chineseName),
+        vendor: clean(source.vendor || parent.vendor),
         variantTitle: clean(source.variantTitle || (source !== parent ? source.title : 'Default Title')),
         price: numberOr(source.price == null ? source.unitPrice : source.price, 0),
         tracked: source.tracked !== false,
         available: source.available == null
           ? (source.inventoryQuantity == null ? '' : source.inventoryQuantity)
           : source.available,
+        imageUrl: safeExternalUrl(source.imageUrl || parent.imageUrl),
+        imageAlt: clean(source.imageAlt || parent.imageAlt),
+        productStatus: clean(source.productStatus || parent.productStatus),
       };
     }
 
@@ -2122,12 +2384,74 @@
       elements.catalogMessage.hidden = catalogVariants.length > 0;
       elements.catalogMessage.textContent = catalogVariants.length
         ? ''
-        : 'No matching Shopify variants were found.';
+        : (isMtoMode(order.checkoutMode)
+          ? 'No matching items were found in MTO 32 Summary.'
+          : 'No matching Shopify variants were found.');
 
       catalogVariants.forEach((variant, index) => {
         const row = document.createElement('tr');
         const product = document.createElement('td');
-        product.textContent = variant.productTitle || 'Unnamed product';
+
+        const summary = document.createElement('div');
+        summary.className = 'catalog-product-summary';
+
+        const thumbnail = document.createElement('div');
+        thumbnail.className = 'catalog-thumbnail';
+
+        if (variant.imageUrl) {
+          const image = document.createElement('img');
+          image.src = variant.imageUrl;
+          image.alt =
+            variant.imageAlt ||
+            [
+              variant.productTitle,
+              variant.variantTitle,
+            ].filter(Boolean).join(' — ') ||
+            'Product image';
+          image.loading = 'lazy';
+          image.decoding = 'async';
+          image.addEventListener('error', () => {
+            image.remove();
+            thumbnail.textContent = 'No image';
+          });
+          thumbnail.appendChild(image);
+        } else {
+          thumbnail.textContent = 'No image';
+        }
+
+        const copy = document.createElement('div');
+        copy.className = 'catalog-product-copy';
+
+        const productTitle = document.createElement('span');
+        productTitle.className = 'catalog-product-title';
+        productTitle.textContent =
+          variant.productTitle ||
+          'Unnamed product';
+        copy.appendChild(productTitle);
+
+        if (variant.chineseName) {
+          const chineseName = document.createElement('span');
+          chineseName.className = 'catalog-product-chinese';
+          chineseName.textContent = variant.chineseName;
+          copy.appendChild(chineseName);
+        }
+
+        if (variant.vendor) {
+          const vendor = document.createElement('span');
+          vendor.className = 'catalog-product-vendor';
+          vendor.textContent = variant.vendor;
+          copy.appendChild(vendor);
+        }
+
+        if (variant.sourceLocation) {
+          const location = document.createElement('span');
+          location.className = 'catalog-product-vendor';
+          location.textContent = `Location: ${variant.sourceLocation}`;
+          copy.appendChild(location);
+        }
+
+        summary.append(thumbnail, copy);
+        product.appendChild(summary);
         const variantCell = document.createElement('td');
         variantCell.textContent = variant.variantTitle || 'Default Title';
         const sku = document.createElement('td');
@@ -2144,12 +2468,17 @@
         add.textContent = 'Add';
         add.dataset.index = String(index);
 
-        const missingIdentity =
-          !variant.variantId ||
-          (variant.tracked !== false && !variant.inventoryItemId);
+        const missingIdentity = isMtoMode(variant.catalogMode)
+          ? !variant.marketItemId
+          : (
+            !variant.variantId ||
+            (variant.tracked !== false && !variant.inventoryItemId)
+          );
         add.disabled = missingIdentity;
         add.title = missingIdentity
-          ? 'This result is missing a Shopify variant or tracked inventory identity.'
+          ? (isMtoMode(variant.catalogMode)
+            ? 'This result is missing an MTO Item ID.'
+            : 'This result is missing a Shopify variant or tracked inventory identity.')
           : 'Add this exact variant';
         add.addEventListener('click', () => addCatalogVariant(index));
         action.appendChild(add);
@@ -2165,14 +2494,28 @@
         return;
       }
 
-      const existing = order.items.find((item) => item.variantId === variant.variantId);
+      const orderMode = normalizeCheckoutMode(order.checkoutMode);
+      const resultMode = normalizeCheckoutMode(variant.catalogMode);
+
+      if (resultMode !== orderMode) {
+        setStatus(
+          'The checkout mode changed after this search. Search again before adding the item.',
+          'error'
+        );
+        return;
+      }
+
+      const variantKey = catalogItemKey(variant);
+      const existing = order.items.find((item) => {
+        return catalogItemKey(item) === variantKey;
+      });
       const nextQuantity = existing
         ? Math.max(1, integerOr(existing.quantity, 1)) + 1
         : 1;
       const available = Number(variant.available);
 
       if (
-        variant.tracked !== false &&
+        (variant.tracked !== false || isMtoMode(resultMode)) &&
         Number.isFinite(available) &&
         !(existing && order.orderId) &&
         nextQuantity > available
@@ -2189,6 +2532,11 @@
         setStatus(`Quantity increased for ${variant.productTitle}.`, 'success');
       } else {
         order.items.push(normalizeItem({
+          catalogMode: resultMode,
+          marketItemId: variant.marketItemId,
+          sourceLocation: variant.sourceLocation,
+          chineseName: variant.chineseName,
+          imageUrl: variant.imageUrl,
           productId: variant.productId,
           variantId: variant.variantId,
           inventoryItemId: variant.inventoryItemId,
@@ -2217,6 +2565,9 @@
 
       return rows.map((item) => ({
         orderId: clean(item.orderId || item.id),
+        checkoutMode: normalizeCheckoutMode(
+          item.checkoutMode || item.mode || item.orderMode
+        ),
         status: clean(item.status || 'ACTIVE').toUpperCase(),
         customerName: clean(item.customerName),
         transactionDate: clean(item.transactionDate),
@@ -2273,7 +2624,9 @@
         const badge = document.createElement('span');
         badge.className = 'badge';
         badge.classList.toggle('cancelled', isCancelled(summary.status));
-        badge.textContent = summary.status;
+        badge.textContent = isMtoMode(summary.checkoutMode)
+          ? `MTO32 · ${summary.status}`
+          : summary.status;
         top.append(id, badge);
 
         const customer = document.createElement('div');
@@ -2338,15 +2691,32 @@
         return;
       }
 
-      setBusy(true, 'Preparing a new checkout…');
+      const nextMode = normalizeCheckoutMode(
+        order && order.checkoutMode
+      );
+      setBusy(
+        true,
+        isMtoMode(nextMode)
+          ? 'Preparing a new MTO32 checkout…'
+          : 'Preparing a new checkout…'
+      );
 
       try {
-        const blankOrder = await serverCall('getBlankCheckoutOrder');
+        const blankOrder = await serverCall(
+          'getBlankCheckoutOrder',
+          nextMode
+        );
         revokeNewImageUrls(order && order.receiptImages);
-        order = normalizeOrder(blankOrder || {});
+        order = normalizeOrder(
+          blankOrder || createBlankOrder(nextMode)
+        );
         elements.orderSearch.value = '';
         renderOrder();
-        setStatus('New checkout ready.');
+        setStatus(
+          isMtoMode(nextMode)
+            ? 'New MTO32 checkout ready.'
+            : 'New checkout ready.'
+        );
       } catch (error) {
         const message = errorMessage(error);
         setStatus(message, 'error');
@@ -2407,7 +2777,9 @@
       }
 
       if (!order.items.length) {
-        errors.items = 'Add at least one Shopify variant.';
+        errors.items = isMtoMode(order.checkoutMode)
+          ? 'Add at least one MTO32 item.'
+          : 'Add at least one Shopify variant.';
       }
 
       order.items.forEach((item, index) => {
@@ -2419,11 +2791,17 @@
           ? quantity * unitPrice
           : 0;
 
-        if (!item.variantId) {
+        if (isMtoMode(order.checkoutMode) && !item.marketItemId) {
+          problems.push('missing MTO Item ID');
+        } else if (!isMtoMode(order.checkoutMode) && !item.variantId) {
           problems.push('missing Shopify variant identity');
         }
 
-        if (item.tracked !== false && !item.inventoryItemId) {
+        if (
+          !isMtoMode(order.checkoutMode) &&
+          item.tracked !== false &&
+          !item.inventoryItemId
+        ) {
           problems.push('missing tracked inventory identity');
         }
 
@@ -2434,12 +2812,16 @@
         const available = Number(item.available);
 
         if (
-          item.tracked !== false &&
+          (item.tracked !== false || isMtoMode(order.checkoutMode)) &&
           clean(item.available) !== '' &&
           Number.isFinite(available) &&
           quantity > available
         ) {
-          problems.push(`only ${available} available in Shopify`);
+          problems.push(
+            isMtoMode(order.checkoutMode)
+              ? `only ${available} left in MTO 32 Summary`
+              : `only ${available} available in Shopify`
+          );
         }
 
         if (!Number.isFinite(unitPrice) || unitPrice < 0) {
@@ -2583,6 +2965,8 @@
 
       return {
         orderId: order.orderId,
+        checkoutMode: normalizeCheckoutMode(order.checkoutMode),
+        mode: normalizeCheckoutMode(order.checkoutMode),
         status: order.status,
         version: integerOr(order.version, 0),
         draftKey: order.draftKey,
@@ -2598,6 +2982,14 @@
           const line = calculateItem(item);
 
           return {
+            catalogMode: normalizeCheckoutMode(item.catalogMode || order.checkoutMode),
+            mode: normalizeCheckoutMode(item.catalogMode || order.checkoutMode),
+            marketItemId: item.marketItemId,
+            sourceItemId: item.marketItemId,
+            itemKey: catalogItemKey(item),
+            sourceLocation: item.sourceLocation,
+            chineseName: item.chineseName,
+            imageUrl: item.imageUrl,
             productId: item.productId,
             variantId: item.variantId,
             inventoryItemId: item.inventoryItemId,
@@ -2606,6 +2998,7 @@
             variantTitle: item.variantTitle,
             title: item.title || item.productTitle,
             tracked: item.tracked !== false,
+            liveAvailable: item.liveAvailable,
             available: item.available,
             quantity: Number(item.quantity),
             unitPrice: roundMoney(item.unitPrice),
@@ -2718,6 +3111,7 @@
       const totals = calculateOrderTotals();
       const summary = {
         orderId: order.orderId,
+        checkoutMode: normalizeCheckoutMode(order.checkoutMode),
         status: order.status,
         customerName: order.customerName,
         transactionDate: order.transactionDate,
@@ -2820,8 +3214,10 @@
       elements.editorTitle = $('editor-title');
       elements.editorSubtitle = $('editor-subtitle');
       elements.orderStatusBadge = $('order-status-badge');
+      elements.checkoutModeBadge = $('checkout-mode-badge');
       elements.orderId = $('order-id');
       elements.orderStatus = $('order-status');
+      elements.checkoutMode = $('checkout-mode');
       elements.transactionDate = $('transaction-date');
       elements.cashier = $('cashier');
       elements.cashierOther = $('cashier-other');
@@ -2832,6 +3228,8 @@
       elements.paymentMethod = $('payment-method');
       elements.orderNotes = $('order-notes');
       elements.addProductButton = $('add-product-button');
+      elements.cartPanelTitle = $('cart-panel-title');
+      elements.cartPanelHelp = $('cart-panel-help');
       elements.cartPanel = $('cart-panel');
       elements.cartBody = $('cart-body');
       elements.emptyCart = $('empty-cart');
@@ -2849,11 +3247,15 @@
       elements.updatedAt = $('updated-at');
       elements.orderVersion = $('order-version');
       elements.catalogBackdrop = $('catalog-backdrop');
+      elements.catalogTitle = $('catalog-title');
       elements.catalogSearch = $('catalog-search');
       elements.catalogSearchButton = $('catalog-search-button');
       elements.catalogCloseButton = $('catalog-close-button');
       elements.catalogResults = $('catalog-results');
       elements.catalogMessage = $('catalog-message');
+      elements.catalogVariantHeading = $('catalog-variant-heading');
+      elements.catalogSkuHeading = $('catalog-sku-heading');
+      elements.catalogStockHeading = $('catalog-stock-heading');
       elements.busyText = $('busy-text');
     }
 
@@ -2867,6 +3269,7 @@
       elements.addProductButton.addEventListener('click', openCatalog);
       elements.catalogSearchButton.addEventListener('click', searchCatalog);
       elements.catalogCloseButton.addEventListener('click', closeCatalog);
+      elements.checkoutMode.addEventListener('change', changeCheckoutMode);
 
       elements.orderSearch.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {

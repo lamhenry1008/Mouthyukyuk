@@ -66,6 +66,8 @@ const MYK_SHOPIFY = Object.freeze({
   sheenColorsMetafieldKey: 'ink_sheen_colors',
   glitterPotionColorMetafieldKey: 'glitter_potion_color',
   glitterPotionSizeMetafieldKey: 'glitter_potion_size',
+  penBaseColorMetafieldKey: 'pen_base_color',
+  penSizeMetafieldKey: 'pen_size',
   sourceSheetMetafieldKey: 'source_sheet',
   sourceRowMetafieldKey: 'source_row',
 
@@ -92,8 +94,11 @@ const MYK_SHOPIFY = Object.freeze({
     'Ink Base Colors',
     'Ink Glitter Colors',
     'Ink Sheen Colors',
+    'Option',
     'Glitter Potion Color',
     'Glitter Potion Size',
+    'Pen Base Color',
+    'Pen Size',
     'Tags',
     'Body HTML',
     'Image URL',
@@ -288,6 +293,12 @@ const MYK_SHEET_PROFILES = Object.freeze({
         'Image',
       ],
 
+      option: [
+        'Option',
+        'Variant Option',
+        'Item Option',
+      ],
+
       baseColors: [
         'Ink Base Color',
         'Ink Base Colors',
@@ -364,6 +375,7 @@ const MYK_SHEET_PROFILES = Object.freeze({
       productType: ['Product Type', 'Type', '產品類型'],
       status: ['Status', 'Product Status', '狀態'],
       imageUrl: ['Image URL', 'Image URLs', 'Image Src', 'Image'],
+      option: ['Option', 'Variant Option', 'Item Option'],
       glitterPotionColor: [
         'Glitter Potion Color',
         'Glitter Color',
@@ -373,6 +385,76 @@ const MYK_SHEET_PROFILES = Object.freeze({
         'Glitter Size',
         'Size',
       ],
+      taxonomyCategoryId: [
+        'Shopify Taxonomy ID',
+        'Taxonomy ID',
+        'Shopify Category ID',
+      ],
+    }),
+  }),
+
+  '鋼筆': Object.freeze({
+    itemType: 'PEN',
+    colorMode: 'PEN',
+    supportsSharedProductVariants: true,
+    defaultTaxonomyCategoryId: '',
+
+    aliases: Object.freeze({
+      englishName: ['English Name'],
+      chineseName: ['Chinese Name'],
+      collection: ['Collection'],
+      brand: ['Brand'],
+      brandShortName: [],
+      collectionShortName: [],
+      uniqueShortName: [],
+      sku: ['SKU'],
+      price: ['Price'],
+      inventory: ['Inventory'],
+      stock: ['Stock'],
+      tags: ['Label Tag'],
+      desc: ['Desc'],
+      productType: ['Product Type'],
+      status: ['Status'],
+      imageUrl: ['Image URL'],
+      option: ['Option'],
+      penBaseColor: ['Pen Base Color'],
+      penSize: ['Pen Size'],
+      taxonomyCategoryId: [
+        'Shopify Taxonomy ID',
+        'Taxonomy ID',
+        'Shopify Category ID',
+      ],
+    }),
+  }),
+
+  '原子筆/鉛筆': Object.freeze({
+    itemType: 'PEN',
+    colorMode: 'PEN',
+    supportsSharedProductVariants: true,
+    defaultTaxonomyCategoryId: '',
+
+    // This profile intentionally mirrors the exact source headings used by
+    // 原子筆/鉛筆. Pen attributes are not aliases of ink or glitter fields.
+    aliases: Object.freeze({
+      englishName: ['English Name'],
+      chineseName: ['Chinese Name'],
+      collection: ['Collection'],
+      brand: ['Brand'],
+      brandShortName: [],
+      collectionShortName: [],
+      uniqueShortName: [],
+      sku: ['SKU'],
+      price: ['Price'],
+      inventory: ['Inventory'],
+      stock: ['Stock'],
+      tags: ['Label Tag'],
+      desc: ['Desc'],
+      productType: ['Product Type'],
+      status: ['Status'],
+      imageUrl: ['Image URL'],
+      option: ['Option'],
+      penBaseColor: ['Pen Base Color'],
+      penSize: ['Pen Size'],
       taxonomyCategoryId: [
         'Shopify Taxonomy ID',
         'Taxonomy ID',
@@ -490,6 +572,22 @@ function setupShopifyMetafields() {
       type: 'single_line_text_field',
       ownerType: 'PRODUCT_VARIANT',
       description: 'Glitter potion variant size.',
+    },
+    {
+      name: 'Pen Base Color',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.penBaseColorMetafieldKey,
+      type: 'single_line_text_field',
+      ownerType: 'PRODUCT_VARIANT',
+      description: 'Pen variant base color.',
+    },
+    {
+      name: 'Pen Size',
+      namespace: MYK_SHOPIFY.metafieldNamespace,
+      key: MYK_SHOPIFY.penSizeMetafieldKey,
+      type: 'single_line_text_field',
+      ownerType: 'PRODUCT_VARIANT',
+      description: 'Pen variant size.',
     },
     {
       name: 'Source Sheet',
@@ -1278,8 +1376,11 @@ function buildReviewRow_(
     product.baseColors.join(', '),
     product.glitterColors.join(', '),
     product.sheenColors.join(', '),
+    product.sourceOption,
     product.glitterPotionColor,
     product.glitterPotionSize,
+    product.penBaseColor,
+    product.penSize,
     product.tags.join(', '),
     product.bodyHtml,
     product.imageUrl,
@@ -1347,8 +1448,11 @@ function buildReviewErrorRow_(
     getAliasedValue_(row, sourceIndices, aliases.baseColors),
     getAliasedValue_(row, sourceIndices, aliases.glitterColors),
     getAliasedValue_(row, sourceIndices, aliases.sheenColors),
+    getAliasedValue_(row, sourceIndices, aliases.option),
     getAliasedValue_(row, sourceIndices, aliases.glitterPotionColor),
     getAliasedValue_(row, sourceIndices, aliases.glitterPotionSize),
+    getAliasedValue_(row, sourceIndices, aliases.penBaseColor),
+    getAliasedValue_(row, sourceIndices, aliases.penSize),
     getAliasedValue_(row, sourceIndices, aliases.tags),
     getAliasedValue_(row, sourceIndices, aliases.desc),
     normalizeReviewImageUrls_(
@@ -1594,6 +1698,11 @@ function buildNormalizedProduct_(
           sourceIndices,
           profile.aliases.sheenColors));
 
+  const sourceOption = getAliasedValue_(
+      row,
+      sourceIndices,
+      profile.aliases.option);
+
   const glitterPotionColor = getAliasedValue_(
       row,
       sourceIndices,
@@ -1603,6 +1712,16 @@ function buildNormalizedProduct_(
       row,
       sourceIndices,
       profile.aliases.glitterPotionSize);
+
+  const penBaseColor = getAliasedValue_(
+      row,
+      sourceIndices,
+      profile.aliases.penBaseColor);
+
+  const penSize = getAliasedValue_(
+      row,
+      sourceIndices,
+      profile.aliases.penSize);
 
   const tags = parseList_(
       getAliasedValue_(
@@ -1642,6 +1761,48 @@ function buildNormalizedProduct_(
         productType,
         existingTaxonomyCategoryId);
 
+  const colorMode = profile.colorMode || '';
+  const variantOptionValues = [];
+
+  if (sourceOption) {
+    variantOptionValues.push({
+      optionName: 'Option',
+      name: sourceOption,
+    });
+  }
+
+  if (colorMode === 'GLITTER_POTION') {
+    if (glitterPotionColor) {
+      variantOptionValues.push({
+        optionName: 'Glitter Potion Color',
+        name: glitterPotionColor,
+      });
+    }
+
+    if (glitterPotionSize) {
+      variantOptionValues.push({
+        optionName: 'Glitter Potion Size',
+        name: glitterPotionSize,
+      });
+    }
+  }
+
+  if (colorMode === 'PEN') {
+    if (penBaseColor) {
+      variantOptionValues.push({
+        optionName: 'Pen Base Color',
+        name: penBaseColor,
+      });
+    }
+
+    if (penSize) {
+      variantOptionValues.push({
+        optionName: 'Pen Size',
+        name: penSize,
+      });
+    }
+  }
+
   return {
     sourceSheetName,
     sourceRowNumber,
@@ -1667,26 +1828,16 @@ function buildNormalizedProduct_(
     baseColors,
     glitterColors,
     sheenColors,
+    sourceOption,
     glitterPotionColor,
     glitterPotionSize,
-    variantOptionValues: [
-      glitterPotionColor
-        ? {
-          optionName: 'Glitter Potion Color',
-          name: glitterPotionColor,
-        }
-        : null,
-      glitterPotionSize
-        ? {
-          optionName: 'Glitter Potion Size',
-          name: glitterPotionSize,
-        }
-        : null,
-    ].filter(Boolean),
+    penBaseColor,
+    penSize,
+    variantOptionValues,
     supportsSharedProductVariants:
       profile.supportsSharedProductVariants === true,
     taxonomyCategoryId,
-    colorMode: profile.colorMode || '',
+    colorMode,
     tags,
     bodyHtml: normalizeBodyHtml_(desc),
 
@@ -2875,6 +3026,10 @@ function getApprovalCandidates() {
       indices,
       'Inventory');
 
+  const optionIndex = requiredColumn_(
+      indices,
+      'Option');
+
   const glitterPotionColorIndex = requiredColumn_(
       indices,
       'Glitter Potion Color');
@@ -2882,6 +3037,14 @@ function getApprovalCandidates() {
   const glitterPotionSizeIndex = requiredColumn_(
       indices,
       'Glitter Potion Size');
+
+  const penBaseColorIndex = requiredColumn_(
+      indices,
+      'Pen Base Color');
+
+  const penSizeIndex = requiredColumn_(
+      indices,
+      'Pen Size');
 
   const resultIndex = requiredColumn_(
       indices,
@@ -2897,8 +3060,11 @@ function getApprovalCandidates() {
         sku: row[skuIndex],
         price: row[priceIndex],
         inventory: row[inventoryIndex],
+        option: row[optionIndex],
         glitterPotionColor: row[glitterPotionColorIndex],
         glitterPotionSize: row[glitterPotionSizeIndex],
+        penBaseColor: row[penBaseColorIndex],
+        penSize: row[penSizeIndex],
         validation: row[validationIndex],
         action: row[actionIndex],
         status: row[statusIndex],
@@ -3485,6 +3651,9 @@ function processOneApprovedReviewRow_(
   const englishNameIndex =
     requiredColumn_(indices, 'English Name');
 
+  const chineseNameIndex =
+    requiredColumn_(indices, 'Chinese Name');
+
   const brandIndex =
     requiredColumn_(indices, 'Brand');
 
@@ -3523,6 +3692,9 @@ function processOneApprovedReviewRow_(
         indices,
         'Ink Sheen Colors');
 
+  const optionIndex =
+    requiredColumn_(indices, 'Option');
+
   const glitterPotionColorIndex =
     requiredColumn_(
         indices,
@@ -3532,6 +3704,16 @@ function processOneApprovedReviewRow_(
     requiredColumn_(
         indices,
         'Glitter Potion Size');
+
+  const penBaseColorIndex =
+    requiredColumn_(
+        indices,
+        'Pen Base Color');
+
+  const penSizeIndex =
+    requiredColumn_(
+        indices,
+        'Pen Size');
 
   const tagsIndex =
     requiredColumn_(indices, 'Tags');
@@ -3581,24 +3763,56 @@ function processOneApprovedReviewRow_(
   }
 
   const isCreateAction = isCreateProductAction_(action);
+  const sourceProfile =
+    MYK_SHEET_PROFILES[clean_(row[sourceSheetIndex])] || {};
+  const colorMode = clean_(sourceProfile.colorMode);
+  const sourceOption = clean_(row[optionIndex]);
   const glitterPotionColor = clean_(
       row[glitterPotionColorIndex]);
   const glitterPotionSize = clean_(
       row[glitterPotionSizeIndex]);
-  const variantOptionValues = [
-    glitterPotionColor
-      ? {
+  const penBaseColor = clean_(row[penBaseColorIndex]);
+  const penSize = clean_(row[penSizeIndex]);
+  const variantOptionValues = [];
+
+  if (sourceOption) {
+    variantOptionValues.push({
+      optionName: 'Option',
+      name: sourceOption,
+    });
+  }
+
+  if (colorMode === 'GLITTER_POTION') {
+    if (glitterPotionColor) {
+      variantOptionValues.push({
         optionName: 'Glitter Potion Color',
         name: glitterPotionColor,
-      }
-      : null,
-    glitterPotionSize
-      ? {
+      });
+    }
+
+    if (glitterPotionSize) {
+      variantOptionValues.push({
         optionName: 'Glitter Potion Size',
         name: glitterPotionSize,
-      }
-      : null,
-  ].filter(Boolean);
+      });
+    }
+  }
+
+  if (colorMode === 'PEN') {
+    if (penBaseColor) {
+      variantOptionValues.push({
+        optionName: 'Pen Base Color',
+        name: penBaseColor,
+      });
+    }
+
+    if (penSize) {
+      variantOptionValues.push({
+        optionName: 'Pen Size',
+        name: penSize,
+      });
+    }
+  }
 
   writeCell_(
       reviewSheet,
@@ -3649,8 +3863,6 @@ function processOneApprovedReviewRow_(
       clean_(row[inventoryItemGidIndex]),
   };
   let effectiveAction = action;
-  const sourceProfile =
-    MYK_SHEET_PROFILES[clean_(row[sourceSheetIndex])] || {};
 
   // Re-resolve planned creates at execution time. This is important when a
   // previous approved row created the shared product after preflight, or when
@@ -3806,6 +4018,9 @@ function processOneApprovedReviewRow_(
       {
         itemId: clean_(row[itemIdIndex]),
         skipItemId: variantOptionValues.length > 0,
+        colorMode,
+        chineseName:
+          clean_(row[chineseNameIndex]),
         baseColors:
           parseList_(row[baseColorsIndex]),
         glitterColors:
@@ -3819,14 +4034,28 @@ function processOneApprovedReviewRow_(
       });
 
   if (variantOptionValues.length > 0) {
+    const variantMetafieldData = {
+      itemId: clean_(row[itemIdIndex]),
+    };
+
+    if (colorMode === 'GLITTER_POTION') {
+      Object.assign(variantMetafieldData, {
+        glitterPotionColor,
+        glitterPotionSize,
+      });
+    }
+
+    if (colorMode === 'PEN') {
+      Object.assign(variantMetafieldData, {
+        penBaseColor,
+        penSize,
+      });
+    }
+
     setShopifyVariantMetafields_(
         accessToken,
         identity.variantId,
-        {
-          itemId: clean_(row[itemIdIndex]),
-          glitterPotionColor,
-          glitterPotionSize,
-        });
+        variantMetafieldData);
   }
 
   const verifiedMetafields =
@@ -3839,11 +4068,14 @@ function processOneApprovedReviewRow_(
         return metafield.key;
       }));
 
-  const requiredProductMetafieldKeys = [
-    MYK_SHOPIFY.baseColorsMetafieldKey,
-    MYK_SHOPIFY.glitterColorsMetafieldKey,
-    MYK_SHOPIFY.sheenColorsMetafieldKey,
-  ];
+  const requiredProductMetafieldKeys =
+    colorMode === 'INK'
+      ? [
+        MYK_SHOPIFY.baseColorsMetafieldKey,
+        MYK_SHOPIFY.glitterColorsMetafieldKey,
+        MYK_SHOPIFY.sheenColorsMetafieldKey,
+      ]
+      : [];
 
   if (variantOptionValues.length === 0) {
     requiredProductMetafieldKeys.unshift(
@@ -4514,29 +4746,32 @@ function setShopifyProductMetafields_(
     }
   `;
 
-  const metafields = [
-    {
-      ownerId: productId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
-      key: MYK_SHOPIFY.baseColorsMetafieldKey,
-      type: 'list.single_line_text_field',
-      value: JSON.stringify(data.baseColors),
-    },
-    {
-      ownerId: productId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
-      key: MYK_SHOPIFY.glitterColorsMetafieldKey,
-      type: 'list.single_line_text_field',
-      value: JSON.stringify(data.glitterColors),
-    },
-    {
-      ownerId: productId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
-      key: MYK_SHOPIFY.sheenColorsMetafieldKey,
-      type: 'list.single_line_text_field',
-      value: JSON.stringify(data.sheenColors),
-    },
-  ];
+  const metafields = [];
+
+  if (clean_(data.colorMode) === 'INK') {
+    metafields.push(
+        {
+          ownerId: productId,
+          namespace: MYK_SHOPIFY.metafieldNamespace,
+          key: MYK_SHOPIFY.baseColorsMetafieldKey,
+          type: 'list.single_line_text_field',
+          value: JSON.stringify(data.baseColors || []),
+        },
+        {
+          ownerId: productId,
+          namespace: MYK_SHOPIFY.metafieldNamespace,
+          key: MYK_SHOPIFY.glitterColorsMetafieldKey,
+          type: 'list.single_line_text_field',
+          value: JSON.stringify(data.glitterColors || []),
+        },
+        {
+          ownerId: productId,
+          namespace: MYK_SHOPIFY.metafieldNamespace,
+          key: MYK_SHOPIFY.sheenColorsMetafieldKey,
+          type: 'list.single_line_text_field',
+          value: JSON.stringify(data.sheenColors || []),
+        });
+  }
 
   if (data.skipItemId !== true) {
     metafields.unshift({
@@ -4616,7 +4851,7 @@ function setShopifyProductMetafields_(
       'metafieldsSet failed');
 }
 
-/** Stores glitter-potion attributes on the exact Shopify variant. */
+/** Stores the managed item identity and sheet-specific variant attributes. */
 function setShopifyVariantMetafields_(
     accessToken,
     variantId,
@@ -4639,29 +4874,47 @@ function setShopifyVariantMetafields_(
       }
     }
   `;
-  const metafields = [
+  const metafields = [{
+    ownerId: variantId,
+    namespace: MYK_SHOPIFY.metafieldNamespace,
+    key: MYK_SHOPIFY.itemIdMetafieldKey,
+    type: 'single_line_text_field',
+    value: clean_(data.itemId),
+  }];
+
+  [
     {
-      ownerId: variantId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
-      key: MYK_SHOPIFY.itemIdMetafieldKey,
-      type: 'single_line_text_field',
-      value: clean_(data.itemId),
-    },
-    {
-      ownerId: variantId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
+      property: 'glitterPotionColor',
       key: MYK_SHOPIFY.glitterPotionColorMetafieldKey,
-      type: 'single_line_text_field',
-      value: clean_(data.glitterPotionColor),
     },
     {
-      ownerId: variantId,
-      namespace: MYK_SHOPIFY.metafieldNamespace,
+      property: 'glitterPotionSize',
       key: MYK_SHOPIFY.glitterPotionSizeMetafieldKey,
-      type: 'single_line_text_field',
-      value: clean_(data.glitterPotionSize),
     },
-  ];
+    {
+      property: 'penBaseColor',
+      key: MYK_SHOPIFY.penBaseColorMetafieldKey,
+    },
+    {
+      property: 'penSize',
+      key: MYK_SHOPIFY.penSizeMetafieldKey,
+    },
+  ].forEach((definition) => {
+    if (
+      Object.prototype.hasOwnProperty.call(
+          data,
+          definition.property) &&
+      clean_(data[definition.property])
+    ) {
+      metafields.push({
+        ownerId: variantId,
+        namespace: MYK_SHOPIFY.metafieldNamespace,
+        key: definition.key,
+        type: 'single_line_text_field',
+        value: clean_(data[definition.property]),
+      });
+    }
+  });
   const payload = callShopifyGraphql_(
       accessToken,
       mutation,
@@ -5295,8 +5548,11 @@ function buildApprovalDialogHtml_() {
           <th>Item ID</th>
           <th>English name</th>
           <th>SKU</th>
+          <th>Option</th>
           <th>Potion color</th>
           <th>Potion size</th>
+          <th>Pen color</th>
+          <th>Pen size</th>
           <th>Price</th>
           <th>Inventory</th>
           <th>Result</th>
@@ -5336,8 +5592,11 @@ function buildApprovalDialogHtml_() {
           '<td>' + escapeHtml(row.itemId) + '</td>',
           '<td>' + escapeHtml(row.title) + '</td>',
           '<td>' + escapeHtml(row.sku) + '</td>',
+          '<td>' + escapeHtml(row.option) + '</td>',
           '<td>' + escapeHtml(row.glitterPotionColor) + '</td>',
           '<td>' + escapeHtml(row.glitterPotionSize) + '</td>',
+          '<td>' + escapeHtml(row.penBaseColor) + '</td>',
+          '<td>' + escapeHtml(row.penSize) + '</td>',
           '<td>' + escapeHtml(row.price) + '</td>',
           '<td>' + escapeHtml(row.inventory) + '</td>',
           '<td class="result">' + escapeHtml(row.result) + '</td>',
@@ -5497,8 +5756,11 @@ function writeReviewRowsToSheet_(sheet, rows) {
     'Ink Base Colors': 120,
     'Ink Glitter Colors': 120,
     'Ink Sheen Colors': 120,
+    'Option': 120,
     'Glitter Potion Color': 130,
     'Glitter Potion Size': 110,
+    'Pen Base Color': 120,
+    'Pen Size': 90,
     'Tags': 150,
     'Body HTML': 180,
     'Image URL': 160,

@@ -1,12 +1,42 @@
 /**
  * Mouthyukyuk checkout and receipt manager.
  *
- * The module records one sheet row per purchased Shopify variant. It does not
- * create Shopify Admin orders; Shopify is used as the catalog and inventory
- * source, while the bound spreadsheet is the auditable order ledger.
+ * The module records one sheet row per purchased catalog item. Standard mode
+ * uses Shopify for catalog and inventory; MTO32 mode uses only MTO 32 Summary.
+ * Neither mode creates Shopify Admin orders. The spreadsheet is the auditable
+ * order ledger.
  */
 const CHECKOUT_CONFIG = Object.freeze({
   sheetName: '訂單紀錄',
+  modes: Object.freeze({
+    standard: 'STANDARD',
+    mto32: 'MTO32',
+  }),
+  mto32: Object.freeze({
+    sheetName: 'MTO 32 Summary',
+    orderPrefix: 'MTO32',
+    sequenceProperty: 'CHECKOUT_MTO32_LAST_SEQUENCE',
+    headers: Object.freeze({
+      itemId: Object.freeze(['MTO Item ID']),
+      englishName: Object.freeze(['MTO English Name', 'English Name']),
+      chineseName: Object.freeze(['MTO Chinese Name', 'Chinese Name']),
+      option: Object.freeze(['MTO Item Option', 'Option']),
+      price: Object.freeze(['MTO Item Price', 'MTO Price', 'Price']),
+      location: Object.freeze([
+        'MTO Item Location',
+        'MTO Location',
+        'Location',
+      ]),
+      stock: Object.freeze(['MTO Item Stock', 'MTO Stock', 'Stock']),
+      left: Object.freeze(['MTO Item Left', 'MTO Left', 'Left']),
+      sold: Object.freeze(['MTO Item Sold', 'MTO Sold', 'Sold']),
+      imageUrl: Object.freeze([
+        'MTO Image URL',
+        'MTO Item Image URL',
+        'Image URL',
+      ]),
+    }),
+  }),
   spreadsheetIdProperty: 'CHECKOUT_SPREADSHEET_ID',
   receiptRootFolderName: '嘴郁郁 Receipt',
   receiptRootFolderProperty: 'CHECKOUT_RECEIPT_FOLDER_ID',
@@ -40,6 +70,7 @@ const CHECKOUT_CONFIG = Object.freeze({
   }),
   headers: Object.freeze([
     '訂單編號',
+    '訂單模式',
     '訂單狀態',
     '版本',
     '草稿鍵',
@@ -56,6 +87,12 @@ const CHECKOUT_CONFIG = Object.freeze({
     '顧客電郵',
     '付款方式',
     '備註',
+    '項目鍵',
+    '來源工作表',
+    '來源項目ID',
+    '中文品名',
+    '來源位置',
+    '商品圖片',
     'Shopify Product GID',
     'Shopify Variant GID',
     'Shopify Inventory Item GID',
@@ -174,6 +211,10 @@ function getCheckoutBootstrap() {
 
   return {
     order: checkoutBlankOrder_(),
+    modes: [
+      CHECKOUT_CONFIG.modes.standard,
+      CHECKOUT_CONFIG.modes.mto32,
+    ],
     paymentMethods:
       CHECKOUT_CONFIG.paymentMethods.slice(),
     cashiers: checkoutGetCashierOptions_(),
@@ -182,13 +223,17 @@ function getCheckoutBootstrap() {
   };
 }
 
-function getBlankCheckoutOrder() {
+function getBlankCheckoutOrder(mode) {
   checkoutEnsureSheet_();
-  return checkoutBlankOrder_();
+  return checkoutBlankOrder_(mode);
 }
 
-function checkoutBlankOrder_() {
+function checkoutBlankOrder_(mode) {
+  const normalizedMode = checkoutNormalizeMode_(mode);
+
   return {
+    mode: normalizedMode,
+    checkoutMode: normalizedMode,
     orderId: '',
     status: CHECKOUT_CONFIG.statuses.active,
     version: 0,
@@ -219,7 +264,22 @@ function checkoutBlankOrder_() {
 /**
  * Searches Shopify and returns exact variant identities for the cart.
  */
-function checkoutSearchCatalog(searchText) {
+function checkoutSearchCatalog(searchText, mode) {
+  if (
+    searchText &&
+    typeof searchText === 'object'
+  ) {
+    mode =
+      searchText.checkoutMode ||
+      searchText.catalogMode ||
+      searchText.mode;
+    searchText = searchText.searchText || searchText.query || '';
+  }
+
+  if (checkoutNormalizeMode_(mode) === CHECKOUT_CONFIG.modes.mto32) {
+    return checkoutSearchMto32Catalog_(searchText);
+  }
+
   const term = checkoutClean_(searchText);
 
   if (!term) {
@@ -232,10 +292,45 @@ function checkoutSearchCatalog(searchText) {
   const escaped = term
       .replace(/\\/g, '\\\\')
       .replace(/"/g, '\\"');
+  const shopifySearchClauses = [
+    `"${escaped}"`,
+    `title:"${escaped}"`,
+    `sku:"${escaped}"`,
+    `handle:"${escaped}"`,
+    `vendor:"${escaped}"`,
+  ];
+
+  // Shopify documents trailing wildcards for prefix matching. Add them only
+  // for a single search token; quoted clauses above handle names with spaces.
+  if (!/\s/.test(term)) {
+    shopifySearchClauses.push(
+        `title:${escaped}*`,
+        `sku:${escaped}*`,
+        `handle:${escaped}*`,
+        `vendor:${escaped}*`);
+  }
+
+  /*
+   * Chinese names are stored in the original product sheets and in Shopify
+   * metafields. Source-sheet matching gives us reliable contains-search even
+   * when Shopify metafield filtering has not been enabled for an older store.
+   */
+  const sourceMatches = checkoutFindSourceCatalogMatches_(
+      term,
+      50);
+  const sourceVariantIds = sourceMatches.map((match) => {
+    return match.variantId;
+  });
+  const sourceMatchByVariantId = {};
+
+  sourceMatches.forEach((match) => {
+    sourceMatchByVariantId[match.variantId] = match;
+  });
 
   const query = `
     query CheckoutCatalogSearch(
       $query: String!,
+      $sourceVariantIds: [ID!]!,
       $locationId: ID!
     ) {
       products(first: 10, query: $query) {
@@ -245,6 +340,12 @@ function checkoutSearchCatalog(searchText) {
           handle
           vendor
           status
+          chineseName: metafield(
+            namespace: "custom",
+            key: "chinese_name"
+          ) {
+            value
+          }
           featuredMedia {
             ... on MediaImage {
               image {
@@ -277,16 +378,58 @@ function checkoutSearchCatalog(searchText) {
           }
         }
       }
+
+      sourceVariants: nodes(ids: $sourceVariantIds) {
+        ... on ProductVariant {
+          id
+          title
+          sku
+          price
+          image {
+            url
+            altText
+          }
+          inventoryItem {
+            id
+            tracked
+            inventoryLevel(locationId: $locationId) {
+              quantities(names: ["available"]) {
+                name
+                quantity
+              }
+            }
+          }
+          product {
+            id
+            title
+            handle
+            vendor
+            status
+            chineseName: metafield(
+              namespace: "custom",
+              key: "chinese_name"
+            ) {
+              value
+            }
+            featuredMedia {
+              ... on MediaImage {
+                image {
+                  url
+                  altText
+                }
+              }
+            }
+          }
+        }
+      }
     }
   `;
 
   const data = shopifyGraphql_(
       query,
       {
-        query:
-          `title:*${escaped}* OR ` +
-          `sku:*${escaped}* OR ` +
-          `handle:*${escaped}*`,
+        query: shopifySearchClauses.join(' OR '),
+        sourceVariantIds,
         locationId,
       });
 
@@ -297,14 +440,83 @@ function checkoutSearchCatalog(searchText) {
       : [];
 
   const results = [];
+  const resultByVariantId = {};
 
-  products.forEach((product) => {
+  const addVariant = (product, variant) => {
+    if (!product || !variant || !variant.id) {
+      return;
+    }
+
+    const sourceMatch = sourceMatchByVariantId[variant.id] || {};
+    const existing = resultByVariantId[variant.id];
+
+    if (existing) {
+      if (!existing.chineseName && sourceMatch.chineseName) {
+        existing.chineseName = sourceMatch.chineseName;
+      }
+
+      return;
+    }
+
     const productImage =
       product.featuredMedia &&
-      product.featuredMedia.image &&
-      product.featuredMedia.image.url ||
-      '';
+      product.featuredMedia.image ||
+      {};
+    const variantImage = variant.image || {};
+    const inventoryItem = variant.inventoryItem || {};
+    const level = inventoryItem.inventoryLevel || null;
+    const result = {
+      productId: product.id,
+      variantId: variant.id,
+      inventoryItemId: inventoryItem.id || '',
+      productTitle: product.title || '',
+      chineseName:
+        product.chineseName && product.chineseName.value ||
+        sourceMatch.chineseName ||
+        '',
+      variantTitle:
+        variant.title === 'Default Title'
+          ? ''
+          : variant.title,
+      sku: variant.sku || '',
+      price: checkoutMoney_(variant.price),
+      available: checkoutAvailableFromLevel_(level),
+      tracked: Boolean(inventoryItem.tracked),
+      vendor:
+        product.vendor ||
+        sourceMatch.vendor ||
+        '',
+      productStatus: product.status || '',
+      imageUrl:
+        variantImage.url ||
+        productImage.url ||
+        sourceMatch.imageUrl ||
+        '',
+      imageAlt:
+        variantImage.altText ||
+        productImage.altText ||
+        product.title ||
+        '',
+    };
 
+    resultByVariantId[variant.id] = result;
+    results.push(result);
+  };
+
+  const sourceVariants = Array.isArray(data.sourceVariants)
+    ? data.sourceVariants
+    : [];
+
+  sourceVariants.forEach((variant) => {
+    if (variant && variant.product) {
+      addVariant(variant.product, variant);
+    }
+  });
+
+  // Source-sheet Chinese-name and brand matches are deliberately added first
+  // so the 100-result limit cannot hide the exact matches the cashier asked
+  // for behind a large general Shopify result set.
+  products.forEach((product) => {
     const variants =
       product.variants &&
       Array.isArray(product.variants.nodes)
@@ -312,38 +524,401 @@ function checkoutSearchCatalog(searchText) {
         : [];
 
     variants.forEach((variant) => {
-      const inventoryItem =
-        variant.inventoryItem || {};
-
-      const level =
-        inventoryItem.inventoryLevel || null;
-
-      const available =
-        checkoutAvailableFromLevel_(level);
-
-      results.push({
-        productId: product.id,
-        variantId: variant.id,
-        inventoryItemId: inventoryItem.id || '',
-        productTitle: product.title,
-        variantTitle:
-          variant.title === 'Default Title'
-            ? ''
-            : variant.title,
-        sku: variant.sku || '',
-        price: checkoutMoney_(variant.price),
-        available,
-        tracked: Boolean(inventoryItem.tracked),
-        vendor: product.vendor || '',
-        productStatus: product.status || '',
-        imageUrl:
-          variant.image && variant.image.url ||
-          productImage,
-      });
+      addVariant(product, variant);
     });
   });
 
   return results.slice(0, 100);
+}
+
+/**
+ * Searches only the fixed MTO source sheet. MTO catalog work must never query
+ * Shopify or depend on Shopify credentials, locations, GIDs, or inventory.
+ */
+function checkoutSearchMto32Catalog_(searchText) {
+  const term = checkoutNormalizeSearch_(searchText);
+
+  if (!term) {
+    return [];
+  }
+
+  const catalog = checkoutReadMto32Catalog_();
+
+  return catalog.items
+      .filter((item) => {
+        return checkoutNormalizeSearch_([
+          item.sourceItemId,
+          item.productTitle,
+          item.chineseName,
+          item.variantTitle,
+          item.sourceLocation,
+        ].join(' ')).indexOf(term) !== -1;
+      })
+      .slice(0, 100)
+      .map((item) => Object.assign({}, item));
+}
+
+/**
+ * Converts common Google Drive share links into a directly renderable image
+ * URL. Non-Drive HTTP(S) URLs are returned unchanged.
+ */
+function checkoutNormalizeCatalogImageUrl_(value) {
+  const url = checkoutClean_(value);
+
+  if (!url || !/^https?:\/\//i.test(url)) {
+    return url;
+  }
+
+  if (!/^https?:\/\/(?:www\.)?drive\.google\.com\//i.test(url)) {
+    return url;
+  }
+
+  const pathMatch = url.match(/\/file\/d\/([^/?#]+)/i);
+  const queryMatch = url.match(/[?&]id=([^&#]+)/i);
+  const encodedId = pathMatch && pathMatch[1] ||
+    queryMatch && queryMatch[1] || '';
+
+  if (!encodedId) {
+    return url;
+  }
+
+  let fileId = encodedId;
+
+  try {
+    fileId = decodeURIComponent(encodedId);
+  } catch (error) {
+    // Keep the original ID when an old URL contains invalid escaping.
+  }
+
+  return `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}`;
+}
+
+/**
+ * Reads and validates the MTO catalog. MTO Item ID is the sole identity.
+ */
+function checkoutReadMto32Catalog_() {
+  const spreadsheet = checkoutGetSpreadsheet_();
+  const sheet = spreadsheet.getSheetByName(
+      CHECKOUT_CONFIG.mto32.sheetName);
+
+  if (!sheet) {
+    throw new Error(
+        `Missing MTO source sheet: ${CHECKOUT_CONFIG.mto32.sheetName}`);
+  }
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastColumn < 1) {
+    throw new Error('The MTO source sheet has no headers.');
+  }
+
+  const values = sheet
+      .getRange(1, 1, Math.max(1, lastRow), lastColumn)
+      .getValues();
+  const displays = sheet
+      .getRange(1, 1, Math.max(1, lastRow), lastColumn)
+      .getDisplayValues();
+  const index = checkoutHeaderIndex_(displays[0]);
+  const headerNames = CHECKOUT_CONFIG.mto32.headers;
+  const columns = {};
+
+  Object.keys(headerNames).forEach((field) => {
+    columns[field] = checkoutFindSourceColumn_(
+        index,
+        headerNames[field]);
+
+    if (columns[field] < 0) {
+      throw new Error(
+          `Missing MTO header: ${headerNames[field][0]}`);
+    }
+  });
+
+  const items = [];
+  const byKey = {};
+
+  for (let offset = 1; offset < displays.length; offset += 1) {
+    const displayRow = displays[offset];
+
+    if (displayRow.every((value) => !checkoutClean_(value))) {
+      continue;
+    }
+
+    const sourceItemId = checkoutClean_(
+        displayRow[columns.itemId]);
+
+    if (!sourceItemId) {
+      throw new Error(
+          `${CHECKOUT_CONFIG.mto32.sheetName}!${offset + 1} ` +
+          `is missing ${headerNames.itemId[0]}.`);
+    }
+
+    const itemKey = checkoutMtoItemKey_(sourceItemId);
+
+    if (byKey[itemKey]) {
+      throw new Error(
+          `Duplicate ${headerNames.itemId[0]} in ` +
+          `${CHECKOUT_CONFIG.mto32.sheetName}: ${sourceItemId}.`);
+    }
+
+    const priceText = checkoutClean_(
+        displayRow[columns.price]);
+
+    if (!priceText) {
+      throw new Error(
+          `Missing Price for MTO item ${sourceItemId}.`);
+    }
+
+    const price = checkoutMoney_(
+        values[offset][columns.price]);
+    const stock = checkoutMtoWholeNumber_(
+        values[offset][columns.stock],
+        'Stock',
+        sourceItemId);
+    const sold = checkoutMtoWholeNumberDefault_(
+        values[offset][columns.sold],
+        'Sold',
+        sourceItemId,
+        0);
+    const left = checkoutMtoWholeNumberDefault_(
+        values[offset][columns.left],
+        'Left',
+        sourceItemId,
+        stock - sold);
+
+    if (!Number.isFinite(price) || price < 0) {
+      throw new Error(
+          `Invalid Price for MTO item ${sourceItemId}.`);
+    }
+
+    const imageUrls = checkoutClean_(
+        displayRow[columns.imageUrl])
+        .split(/[\r\n;|]+/)
+        .map(checkoutClean_)
+        .filter(Boolean);
+    const item = {
+      mode: CHECKOUT_CONFIG.modes.mto32,
+      checkoutMode: CHECKOUT_CONFIG.modes.mto32,
+      catalogMode: CHECKOUT_CONFIG.modes.mto32,
+      itemKey,
+      sourceSheetName: CHECKOUT_CONFIG.mto32.sheetName,
+      sourceItemId,
+      marketItemId: sourceItemId,
+      sourceRow: offset + 1,
+      sourceLocation: checkoutClean_(
+          displayRow[columns.location]),
+      productId: '',
+      variantId: '',
+      inventoryItemId: '',
+      sku: sourceItemId,
+      productTitle: checkoutClean_(
+          displayRow[columns.englishName]),
+      chineseName: checkoutClean_(
+          displayRow[columns.chineseName]),
+      variantTitle: checkoutClean_(
+          displayRow[columns.option]),
+      price,
+      available: left,
+      tracked: false,
+      vendor: '',
+      productStatus: '',
+      imageUrl:
+        checkoutNormalizeCatalogImageUrl_(imageUrls[0] || ''),
+      imageAlt: checkoutClean_(
+          displayRow[columns.englishName]) || sourceItemId,
+      stock,
+      left,
+      sold,
+    };
+
+    byKey[itemKey] = item;
+    items.push(item);
+  }
+
+  return {sheet, columns, items, byKey};
+}
+
+/**
+ * Resolves only the MTO identity and inventory columns. Rollback must not be
+ * blocked by an unrelated row's price, image, name, or temporarily invalid
+ * calculated inventory value.
+ */
+function checkoutReadMto32IdentityIndex_(sourceItemIds) {
+  const spreadsheet = checkoutGetSpreadsheet_();
+  const sheet = spreadsheet.getSheetByName(
+      CHECKOUT_CONFIG.mto32.sheetName);
+
+  if (!sheet) {
+    throw new Error(
+        `Missing MTO source sheet: ${CHECKOUT_CONFIG.mto32.sheetName}`);
+  }
+
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastColumn < 1) {
+    throw new Error('The MTO source sheet has no headers.');
+  }
+
+  const index = checkoutHeaderIndex_(
+      sheet.getRange(1, 1, 1, lastColumn)
+          .getDisplayValues()[0]);
+  const headerNames = CHECKOUT_CONFIG.mto32.headers;
+  const columns = {};
+
+  ['itemId', 'stock', 'left', 'sold'].forEach((field) => {
+    columns[field] = checkoutFindSourceColumn_(
+        index,
+        headerNames[field]);
+
+    if (columns[field] < 0) {
+      throw new Error(
+          `Missing MTO header: ${headerNames[field][0]}`);
+    }
+  });
+
+  const byKey = {};
+  const requestedKeys = {};
+
+  (sourceItemIds || []).forEach((sourceItemId) => {
+    const key = checkoutMtoItemKey_(sourceItemId);
+
+    if (key) {
+      requestedKeys[key] = true;
+    }
+  });
+
+  const restrictToRequested =
+    Object.keys(requestedKeys).length > 0;
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow >= 2) {
+    const ids = sheet
+        .getRange(2, columns.itemId + 1, lastRow - 1, 1)
+        .getDisplayValues();
+
+    ids.forEach((row, offset) => {
+      const sourceItemId = checkoutClean_(row[0]);
+
+      if (!sourceItemId) {
+        return;
+      }
+
+      const key = checkoutMtoItemKey_(sourceItemId);
+
+      if (restrictToRequested && !requestedKeys[key]) {
+        return;
+      }
+
+      if (byKey[key]) {
+        throw new Error(
+            `Duplicate ${headerNames.itemId[0]} in ` +
+            `${CHECKOUT_CONFIG.mto32.sheetName}: ${sourceItemId}.`);
+      }
+
+      byKey[key] = {
+        sourceItemId,
+        rowNumber: offset + 2,
+      };
+    });
+  }
+
+  return {sheet, columns, byKey};
+}
+
+/**
+ * Finds exact Shopify variant identities whose original-sheet Chinese name or
+ * brand contains the search term. Shopify remains the source for the returned
+ * price, image and live inventory quantity.
+ */
+function checkoutFindSourceCatalogMatches_(searchText, limit) {
+  const term = checkoutNormalizeSearch_(searchText);
+
+  if (!term) {
+    return [];
+  }
+
+  const maximum = Math.max(1, Number(limit) || 50);
+  const spreadsheet = checkoutGetSpreadsheet_();
+  const matchesByVariantId = {};
+
+  spreadsheet.getSheets().some((sheet) => {
+    if (!checkoutIsCatalogSourceSheet_(sheet)) {
+      return false;
+    }
+
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+
+    if (lastRow < 2 || lastColumn < 1) {
+      return false;
+    }
+
+    const values = sheet
+        .getRange(1, 1, lastRow, lastColumn)
+        .getDisplayValues();
+    const index = checkoutHeaderIndex_(values[0]);
+    const variantGidColumn = checkoutFindSourceColumn_(
+        index,
+        ['Shopify Variant GID']);
+    const chineseNameColumn = checkoutFindSourceColumn_(
+        index,
+        ['Chinese Name', 'Chinese', '中文名稱']);
+    const brandColumn = checkoutFindSourceColumn_(
+        index,
+        ['Brand', '品牌']);
+    const imageUrlColumn = checkoutFindSourceColumn_(
+        index,
+        ['Image URL', 'Image URLs', 'Image Src', 'Image']);
+
+    if (
+      variantGidColumn < 0 ||
+      (chineseNameColumn < 0 && brandColumn < 0)
+    ) {
+      return false;
+    }
+
+    for (let offset = 1; offset < values.length; offset += 1) {
+      const row = values[offset];
+      const variantId = checkoutClean_(row[variantGidColumn]);
+      const chineseName = chineseNameColumn >= 0
+        ? checkoutClean_(row[chineseNameColumn])
+        : '';
+      const vendor = brandColumn >= 0
+        ? checkoutClean_(row[brandColumn])
+        : '';
+      const sourceImageUrls = imageUrlColumn >= 0
+        ? checkoutClean_(row[imageUrlColumn])
+            .split(/[\r\n;|]+/)
+            .map((value) => checkoutClean_(value))
+            .filter(Boolean)
+        : [];
+      const haystack = checkoutNormalizeSearch_(
+          `${chineseName} ${vendor}`);
+
+      if (
+        /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(variantId) &&
+        haystack.indexOf(term) !== -1 &&
+        !matchesByVariantId[variantId]
+      ) {
+        matchesByVariantId[variantId] = {
+          variantId,
+          chineseName,
+          vendor,
+          imageUrl: sourceImageUrls[0] || '',
+        };
+      }
+
+      if (Object.keys(matchesByVariantId).length >= maximum) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+
+  return Object.keys(matchesByVariantId)
+      .map((variantId) => matchesByVariantId[variantId])
+      .slice(0, maximum);
 }
 
 function findCheckoutOrders(searchText) {
@@ -369,7 +944,9 @@ function findCheckoutOrders(searchText) {
               .map((item) => {
                 return [
                   item.sku,
+                  item.sourceItemId,
                   item.productTitle,
+                  item.chineseName,
                   item.variantTitle,
                 ].join(' ');
               })
@@ -385,6 +962,8 @@ function findCheckoutOrders(searchText) {
       .slice(0, 50)
       .map((order) => ({
         orderId: order.orderId,
+        mode: order.mode,
+        checkoutMode: order.mode,
         status: order.status,
         version: order.version,
         transactionDate: order.transactionDate,
@@ -429,6 +1008,20 @@ function saveCheckoutOrder(inputModel) {
     const previous = submittedOrderId
       ? checkoutLoadOrder_(submittedOrderId)
       : null;
+    const incomingMode = checkoutNormalizeMode_(
+        incoming.checkoutMode || incoming.mode);
+
+    if (
+      previous &&
+      checkoutNormalizeMode_(previous.mode) !== incomingMode
+    ) {
+      throw new Error(
+          'An existing order cannot be changed to another checkout mode.');
+    }
+
+    const orderMode = previous
+      ? checkoutNormalizeMode_(previous.mode)
+      : incomingMode;
 
     if (
       previous &&
@@ -486,7 +1079,7 @@ function saveCheckoutOrder(inputModel) {
 
     const orderId = previous
       ? previous.orderId
-      : checkoutOrderId_(transactionDate, draftKey);
+      : checkoutOrderId_(transactionDate, draftKey, orderMode);
 
     if (!previous) {
       const sameDraft = checkoutFindOrderByDraftKey_(
@@ -517,6 +1110,8 @@ function saveCheckoutOrder(inputModel) {
 
     const order = {
       orderId,
+      mode: orderMode,
+      checkoutMode: orderMode,
       status: CHECKOUT_CONFIG.statuses.active,
       version,
       draftKey,
@@ -543,7 +1138,8 @@ function saveCheckoutOrder(inputModel) {
         checkoutClean_(incoming.paymentMethod),
       notes: checkoutClean_(incoming.notes),
       items: checkoutNormalizeOrderItems_(
-          incoming.items),
+          incoming.items,
+          orderMode),
       receiptImages: [],
       receiptUrl: '',
       receiptFileId: '',
@@ -556,7 +1152,7 @@ function saveCheckoutOrder(inputModel) {
     };
 
     checkoutValidateOrderHeader_(order);
-    checkoutHydrateTrustedVariants_(order);
+    checkoutHydrateTrustedItems_(order);
     checkoutCalculateTotals_(order);
 
     const sourcePlan =
@@ -671,8 +1267,11 @@ function saveCheckoutOrder(inputModel) {
         return {
           ok: false,
           message:
-            `${error.message} Sheet sales and Shopify inventory were ` +
-            'rolled back; you can safely try saving again.',
+            orderMode === CHECKOUT_CONFIG.modes.mto32
+              ? `${error.message} MTO Left/Sold changes were rolled back; ` +
+                'you can safely try saving again.'
+              : `${error.message} Sheet sales and Shopify inventory were ` +
+                'rolled back; you can safely try saving again.',
           retryRequestKey: Utilities.getUuid(),
         };
       }
@@ -863,8 +1462,12 @@ function cancelCheckoutOrder(
         return {
           ok: false,
           message:
-            `${error.message} Sheet sales and Shopify inventory were ` +
-            'rolled back; you can safely try cancelling again.',
+            checkoutNormalizeMode_(cancelled.mode) ===
+              CHECKOUT_CONFIG.modes.mto32
+              ? `${error.message} MTO Left/Sold changes were rolled back; ` +
+                'you can safely try cancelling again.'
+              : `${error.message} Sheet sales and Shopify inventory were ` +
+                'rolled back; you can safely try cancelling again.',
           retryRequestKey: Utilities.getUuid(),
         };
       }
@@ -890,10 +1493,14 @@ function cancelCheckoutOrder(
   }
 }
 
-function checkoutNormalizeOrderItems_(items) {
+function checkoutNormalizeOrderItems_(items, mode) {
+  const normalizedMode = checkoutNormalizeMode_(mode);
+
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error(
-        'Add at least one Shopify variant.');
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? 'Add at least one MTO item.'
+          : 'Add at least one Shopify variant.');
   }
 
   const seen = {};
@@ -902,20 +1509,41 @@ function checkoutNormalizeOrderItems_(items) {
     const item = raw || {};
     const variantId =
       checkoutClean_(item.variantId);
+    const sourceItemId = checkoutClean_(
+        item.marketItemId || item.sourceItemId || item.mtoItemId ||
+        (normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? item.sku
+          : ''));
+    const identityKey =
+      normalizedMode === CHECKOUT_CONFIG.modes.mto32
+        ? checkoutMtoItemKey_(sourceItemId)
+        : variantId;
 
-    if (!variantId) {
+    if (
+      normalizedMode === CHECKOUT_CONFIG.modes.mto32 &&
+      !sourceItemId
+    ) {
+      throw new Error(
+          `Item ${index + 1} has no MTO Item ID. ` +
+          'Choose it from MTO catalog search.');
+    }
+
+    if (
+      normalizedMode === CHECKOUT_CONFIG.modes.standard &&
+      !variantId
+    ) {
       throw new Error(
           `Item ${index + 1} has no Shopify Variant GID. ` +
           'Choose it from catalog search.');
     }
 
-    if (seen[variantId]) {
+    if (seen[identityKey]) {
       throw new Error(
-          `The same variant appears more than once: ` +
-          `${checkoutClean_(item.sku) || variantId}`);
+          `The same item appears more than once: ` +
+          `${sourceItemId || checkoutClean_(item.sku) || variantId}`);
     }
 
-    seen[variantId] = true;
+    seen[identityKey] = true;
 
     const quantity = Number(item.quantity);
     const unitPrice = checkoutMoney_(item.unitPrice);
@@ -977,11 +1605,45 @@ function checkoutNormalizeOrderItems_(items) {
     }
 
     return {
-      productId: checkoutClean_(item.productId),
-      variantId,
+      mode: normalizedMode,
+      checkoutMode: normalizedMode,
+      catalogMode: normalizedMode,
+      itemKey:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? checkoutMtoItemKey_(sourceItemId)
+          : `SHOPIFY:${variantId}`,
+      sourceSheetName:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? CHECKOUT_CONFIG.mto32.sheetName
+          : checkoutClean_(item.sourceSheetName),
+      sourceItemId:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? sourceItemId
+          : checkoutClean_(item.sourceItemId),
+      marketItemId:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? sourceItemId
+          : checkoutClean_(item.marketItemId),
+      sourceLocation:
+        checkoutClean_(item.sourceLocation || item.location),
+      chineseName: checkoutClean_(item.chineseName),
+      imageUrl: checkoutClean_(item.imageUrl),
+      productId:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? ''
+          : checkoutClean_(item.productId),
+      variantId:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? ''
+          : variantId,
       inventoryItemId:
-        checkoutClean_(item.inventoryItemId),
-      sku: checkoutClean_(item.sku),
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? ''
+          : checkoutClean_(item.inventoryItemId),
+      sku:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? sourceItemId
+          : checkoutClean_(item.sku),
       productTitle:
         checkoutClean_(item.productTitle),
       variantTitle:
@@ -991,7 +1653,10 @@ function checkoutNormalizeOrderItems_(items) {
       discountType,
       discountValue,
       lineTotal: 0,
-      tracked: item.tracked !== false,
+      tracked:
+        normalizedMode === CHECKOUT_CONFIG.modes.mto32
+          ? false
+          : item.tracked !== false,
       available:
         item.available == null
           ? null
@@ -1034,6 +1699,57 @@ function checkoutValidateOrderHeader_(order) {
  * Re-reads every variant from Shopify so IDs, titles, SKUs and tracking state
  * are never trusted from browser-submitted values.
  */
+function checkoutHydrateTrustedItems_(order) {
+  if (
+    checkoutNormalizeMode_(order && order.mode) ===
+    CHECKOUT_CONFIG.modes.mto32
+  ) {
+    checkoutHydrateTrustedMto32Items_(order);
+    return;
+  }
+
+  checkoutHydrateTrustedVariants_(order);
+}
+
+/**
+ * Re-reads MTO rows using MTO Item ID. This deliberately makes no Shopify
+ * request and leaves every Shopify identity blank.
+ */
+function checkoutHydrateTrustedMto32Items_(order) {
+  const catalog = checkoutReadMto32Catalog_();
+
+  order.items.forEach((item, index) => {
+    const key = checkoutMtoItemKey_(
+        item.marketItemId || item.sourceItemId || item.sku);
+    const trusted = catalog.byKey[key];
+
+    if (!trusted) {
+      throw new Error(
+          `MTO item no longer exists for item ${index + 1}: ` +
+          `${item.sourceItemId || item.sku || '(missing ID)'}.`);
+    }
+
+    item.mode = CHECKOUT_CONFIG.modes.mto32;
+    item.checkoutMode = CHECKOUT_CONFIG.modes.mto32;
+    item.catalogMode = CHECKOUT_CONFIG.modes.mto32;
+    item.itemKey = trusted.itemKey;
+    item.sourceSheetName = CHECKOUT_CONFIG.mto32.sheetName;
+    item.sourceItemId = trusted.sourceItemId;
+    item.marketItemId = trusted.sourceItemId;
+    item.sourceLocation = trusted.sourceLocation;
+    item.chineseName = trusted.chineseName;
+    item.imageUrl = trusted.imageUrl;
+    item.productId = '';
+    item.variantId = '';
+    item.inventoryItemId = '';
+    item.sku = trusted.sourceItemId;
+    item.productTitle = trusted.productTitle;
+    item.variantTitle = trusted.variantTitle;
+    item.tracked = false;
+    item.available = trusted.left;
+  });
+}
+
 function checkoutHydrateTrustedVariants_(order) {
   const ids = order.items.map((item) => {
     return item.variantId;
@@ -1335,6 +2051,13 @@ function checkoutTrashOwnedReceiptImage_(
 function checkoutBuildSourceInventoryPlan_(
     previous,
     next) {
+  const mode = checkoutNormalizeMode_(
+      next && next.mode || previous && previous.mode);
+
+  if (mode === CHECKOUT_CONFIG.modes.mto32) {
+    return checkoutBuildMto32InventoryPlan_(previous, next);
+  }
+
   const spreadsheet = checkoutGetSpreadsheet_();
   const previousQuantities =
     previous && previous.sourceSalesApplied === true
@@ -1490,7 +2213,154 @@ function checkoutVariantQuantities_(order) {
   return quantities;
 }
 
+/**
+ * Builds reversible MTO Left/Sold changes. Stock is read-only and Shopify is
+ * intentionally absent from this transaction.
+ */
+function checkoutBuildMto32InventoryPlan_(previous, next) {
+  const catalog = checkoutReadMto32Catalog_();
+  const previousQuantities =
+    previous && previous.sourceSalesApplied === true
+      ? checkoutVariantQuantities_(previous)
+      : {};
+  const nextQuantities = checkoutVariantQuantities_(next);
+  const items = {};
+
+  [previous, next].forEach((order) => {
+    (order && order.items || []).forEach((item) => {
+      const key = checkoutVariantIdentityKey_(item);
+
+      if (key) {
+        items[key] = item;
+      }
+    });
+  });
+
+  return Object.keys(items).map((key) => {
+    const item = items[key];
+    const trusted = catalog.byKey[key];
+
+    if (!trusted) {
+      throw new Error(
+          `No MTO source row was found for ` +
+          `${item.sourceItemId || item.sku || key}.`);
+    }
+
+    const rowNumber = trusted.sourceRow;
+    const stockCell = checkoutCaptureSourceCell_(
+        catalog.sheet,
+        rowNumber,
+        catalog.columns.stock);
+    const leftCell = checkoutCaptureSourceCell_(
+        catalog.sheet,
+        rowNumber,
+        catalog.columns.left);
+    const soldCell = checkoutCaptureSourceCell_(
+        catalog.sheet,
+        rowNumber,
+        catalog.columns.sold);
+
+    if (soldCell.formula) {
+      throw new Error(
+          `MTO Sold must be an editable value, not a formula: ` +
+          `${trusted.sourceItemId}.`);
+    }
+
+    const stock = checkoutMtoWholeNumber_(
+        stockCell.value,
+        'Stock',
+        trusted.sourceItemId);
+    const currentLeft = checkoutMtoWholeNumber_(
+        checkoutClean_(leftCell.value) === ''
+          ? stock - checkoutMtoWholeNumberDefault_(
+              soldCell.value,
+              'Sold',
+              trusted.sourceItemId,
+              0)
+          : leftCell.value,
+        'Left',
+        trusted.sourceItemId);
+    const currentSold = checkoutMtoWholeNumberDefault_(
+        soldCell.value,
+        'Sold',
+        trusted.sourceItemId,
+        0);
+    const deltaSold =
+      Number(nextQuantities[key] || 0) -
+      Number(previousQuantities[key] || 0);
+    const newSold = currentSold + deltaSold;
+    const newLeft = currentLeft - deltaSold;
+
+    if (!Number.isInteger(newSold) || newSold < 0) {
+      throw new Error(
+          `Checkout would make MTO Sold invalid for ` +
+          `${trusted.sourceItemId}: ${newSold}.`);
+    }
+
+    if (!Number.isInteger(newLeft) || newLeft < 0) {
+      throw new Error(
+          `Insufficient MTO Left for ${trusted.sourceItemId}. ` +
+          `Available ${currentLeft}, requested change ${deltaSold}.`);
+    }
+
+    return {
+      kind: CHECKOUT_CONFIG.modes.mto32,
+      item: {
+        mode: CHECKOUT_CONFIG.modes.mto32,
+        itemKey: key,
+        sourceItemId: trusted.sourceItemId,
+        sourceSheetName: CHECKOUT_CONFIG.mto32.sheetName,
+        sku: trusted.sourceItemId,
+        tracked: false,
+      },
+      sheetName: CHECKOUT_CONFIG.mto32.sheetName,
+      rowNumber,
+      columns: catalog.columns,
+      original: {
+        stock: stockCell,
+        left: leftCell,
+        sold: soldCell,
+      },
+      stock,
+      currentLeft,
+      currentSold,
+      newLeft,
+      newSold,
+      deltaSold,
+      writeApplied: false,
+      soldWriteApplied: false,
+      leftWriteApplied: false,
+      expectedAfter: {
+        sold: {
+          value: newSold,
+          formula: '',
+        },
+        left: {
+          value: newLeft,
+          formula: leftCell.formula || '',
+        },
+      },
+    };
+  });
+}
+
 function checkoutVariantIdentityKey_(item) {
+  const explicitKey = checkoutClean_(
+      item && item.itemKey);
+  const sourceItemId = checkoutClean_(
+      item && (item.marketItemId || item.sourceItemId || item.mtoItemId));
+  const rawMode = checkoutClean_(
+      item && (item.mode || item.checkoutMode || item.catalogMode));
+  const isMto =
+    explicitKey.indexOf('MTO32:') === 0 ||
+    rawMode.toUpperCase() === CHECKOUT_CONFIG.modes.mto32;
+
+  if (isMto) {
+    return sourceItemId
+      ? checkoutMtoItemKey_(sourceItemId)
+      : explicitKey;
+  }
+
   const variantId = checkoutClean_(
       item && item.variantId);
   const sku = checkoutClean_(item && item.sku)
@@ -1589,6 +2459,7 @@ function checkoutIsCatalogSourceSheet_(sheet) {
 
   if (
     name === CHECKOUT_CONFIG.sheetName ||
+    name.toUpperCase().indexOf('__MYK_REVIEW_') === 0 ||
     /^shopify\s.*(?:review|preview|import)/i.test(name)
   ) {
     return false;
@@ -1694,6 +2565,20 @@ function checkoutSourceWholeNumber_(value, field, item) {
 }
 
 function checkoutApplySourceInventoryPlanToSheets_(plan) {
+  if (!plan || plan.length === 0) {
+    return;
+  }
+
+  if (
+    plan.length > 0 &&
+    plan.every((entry) => {
+      return entry.kind === CHECKOUT_CONFIG.modes.mto32;
+    })
+  ) {
+    checkoutApplyMto32InventoryPlanToSheet_(plan);
+    return;
+  }
+
   const spreadsheet = checkoutGetSpreadsheet_();
 
   plan.forEach((entry) => {
@@ -1785,6 +2670,85 @@ function checkoutApplySourceInventoryPlanToSheets_(plan) {
   SpreadsheetApp.flush();
 }
 
+function checkoutApplyMto32InventoryPlanToSheet_(plan) {
+  const catalog = checkoutReadMto32IdentityIndex_(
+      plan.map((entry) => entry.item.sourceItemId));
+
+  plan.forEach((entry) => {
+    const key = checkoutMtoItemKey_(entry.item.sourceItemId);
+    const trusted = catalog.byKey[key];
+
+    if (!trusted) {
+      throw new Error(
+          `MTO item moved or was removed during checkout: ` +
+          `${entry.item.sourceItemId}.`);
+    }
+
+    entry.rowNumber = trusted.rowNumber;
+    const currentCells = {
+      stock: checkoutCaptureSourceCell_(
+          catalog.sheet,
+          entry.rowNumber,
+          catalog.columns.stock),
+      left: checkoutCaptureSourceCell_(
+          catalog.sheet,
+          entry.rowNumber,
+          catalog.columns.left),
+      sold: checkoutCaptureSourceCell_(
+          catalog.sheet,
+          entry.rowNumber,
+          catalog.columns.sold),
+    };
+
+    if (
+      !checkoutSourceCellMatches_(currentCells.stock, entry.original.stock) ||
+      !checkoutSourceCellMatches_(currentCells.left, entry.original.left) ||
+      !checkoutSourceCellMatches_(currentCells.sold, entry.original.sold)
+    ) {
+      throw new Error(
+          `Stock, Left, or Sold changed for MTO item ` +
+          `${entry.item.sourceItemId} while checkout was running. Try again.`);
+    }
+
+    catalog.sheet
+        .getRange(entry.rowNumber, catalog.columns.sold + 1)
+        .setValue(entry.newSold);
+    entry.writeApplied = true;
+    entry.soldWriteApplied = true;
+
+    if (!entry.original.left.formula) {
+      catalog.sheet
+          .getRange(entry.rowNumber, catalog.columns.left + 1)
+          .setValue(entry.newLeft);
+      entry.leftWriteApplied = true;
+    }
+  });
+
+  SpreadsheetApp.flush();
+
+  plan.forEach((entry) => {
+    const sold = checkoutMtoWholeNumber_(
+        catalog.sheet
+            .getRange(entry.rowNumber, catalog.columns.sold + 1)
+            .getValue(),
+        'Sold',
+        entry.item.sourceItemId);
+    const left = checkoutMtoWholeNumber_(
+        catalog.sheet
+            .getRange(entry.rowNumber, catalog.columns.left + 1)
+            .getValue(),
+        'Left',
+        entry.item.sourceItemId);
+
+    if (sold !== entry.newSold || left !== entry.newLeft) {
+      throw new Error(
+          `MTO inventory verification failed for ` +
+          `${entry.item.sourceItemId}: expected Left ${entry.newLeft}, ` +
+          `Sold ${entry.newSold}; got Left ${left}, Sold ${sold}.`);
+    }
+  });
+}
+
 function checkoutSourceCellMatches_(left, right) {
   const leftFormula = checkoutClean_(left && left.formula);
   const rightFormula = checkoutClean_(right && right.formula);
@@ -1808,6 +2772,20 @@ function checkoutSourceCellMatches_(left, right) {
 }
 
 function checkoutRestoreSourceInventoryPlan_(plan) {
+  if (!plan || plan.length === 0) {
+    return;
+  }
+
+  if (
+    plan.length > 0 &&
+    plan.every((entry) => {
+      return entry.kind === CHECKOUT_CONFIG.modes.mto32;
+    })
+  ) {
+    checkoutRestoreMto32InventoryPlan_(plan);
+    return;
+  }
+
   const spreadsheet = checkoutGetSpreadsheet_();
   const errors = [];
 
@@ -1852,6 +2830,105 @@ function checkoutRestoreSourceInventoryPlan_(plan) {
   }
 }
 
+function checkoutRestoreMto32InventoryPlan_(plan) {
+  const writtenEntries = plan.filter((entry) => {
+    return entry.writeApplied === true;
+  });
+
+  if (writtenEntries.length === 0) {
+    return;
+  }
+
+  const catalog = checkoutReadMto32IdentityIndex_(
+      writtenEntries.map((entry) => entry.item.sourceItemId));
+  const errors = [];
+
+  writtenEntries.slice().reverse().forEach((entry) => {
+    try {
+      const trusted = catalog.byKey[
+          checkoutMtoItemKey_(entry.item.sourceItemId)];
+
+      if (!trusted) {
+        throw new Error('source row no longer exists');
+      }
+
+      const currentSold = checkoutCaptureSourceCell_(
+          catalog.sheet,
+          trusted.rowNumber,
+          catalog.columns.sold);
+      const currentLeft = checkoutCaptureSourceCell_(
+          catalog.sheet,
+          trusted.rowNumber,
+          catalog.columns.left);
+      const soldIsExpected = checkoutSourceCellMatches_(
+          currentSold,
+          entry.expectedAfter.sold);
+      const soldIsOriginal = checkoutSourceCellMatches_(
+          currentSold,
+          entry.original.sold);
+
+      if (!soldIsExpected && !soldIsOriginal) {
+        throw new Error(
+            'Sold changed again after checkout; rollback refused to ' +
+            'overwrite the newer value');
+      }
+
+      if (entry.original.left.formula) {
+        if (
+          checkoutClean_(currentLeft.formula) !==
+          checkoutClean_(entry.original.left.formula)
+        ) {
+          throw new Error(
+              'Left formula changed after checkout; rollback refused to ' +
+              'overwrite the newer formula');
+        }
+      } else if (entry.leftWriteApplied) {
+        const leftIsExpected = checkoutSourceCellMatches_(
+            currentLeft,
+            entry.expectedAfter.left);
+        const leftIsOriginal = checkoutSourceCellMatches_(
+            currentLeft,
+            entry.original.left);
+
+        if (!leftIsExpected && !leftIsOriginal) {
+          throw new Error(
+              'Left changed again after checkout; rollback refused to ' +
+              'overwrite the newer value');
+        }
+
+        if (leftIsExpected) {
+          checkoutRestoreSourceCell_(
+              catalog.sheet,
+              trusted.rowNumber,
+              catalog.columns.left,
+              entry.original.left);
+        }
+      }
+
+      if (soldIsExpected) {
+        checkoutRestoreSourceCell_(
+            catalog.sheet,
+            trusted.rowNumber,
+            catalog.columns.sold,
+            entry.original.sold);
+      }
+
+      entry.writeApplied = false;
+      entry.soldWriteApplied = false;
+      entry.leftWriteApplied = false;
+    } catch (error) {
+      errors.push(
+          `${entry.item.sourceItemId}: ${error.message}`);
+    }
+  });
+
+  SpreadsheetApp.flush();
+
+  if (errors.length > 0) {
+    throw new Error(errors.join(' | '));
+  }
+}
+
 function checkoutRestoreSourceCell_(
     sheet,
     row,
@@ -1876,6 +2953,17 @@ function checkoutApplySourceInventoryPlan_(
     order,
     action,
     operationKey) {
+  if (
+    checkoutNormalizeMode_(order && order.mode) ===
+    CHECKOUT_CONFIG.modes.mto32
+  ) {
+    return {
+      message:
+        `MTO_SOURCE_UPDATED: ${plan.length}; SHOPIFY_SKIPPED`,
+      changes: [],
+    };
+  }
+
   const trackedEntries = plan.filter((entry) => {
     return entry.item.tracked !== false;
   });
@@ -2650,27 +3738,68 @@ function checkoutWriteOrder_(sheet, order) {
   const existingRows = checkoutFindCurrentOrderRows_(
       sheet,
       order.orderId);
+  const backupRows = existingRows.map((entry) => {
+    return entry.preservedValues.slice();
+  });
+  const writeState = {applied: false};
 
-  const rowsByVariant = {};
-
-  existingRows.forEach((entry) => {
-    const key = checkoutClean_(entry.variantId);
-
-    if (!rowsByVariant[key]) {
-      rowsByVariant[key] = [];
+  try {
+    checkoutWriteOrderRows_(
+        sheet,
+        order,
+        records,
+        existingRows,
+        writeState);
+  } catch (error) {
+    if (!writeState.applied) {
+      throw error;
     }
 
-    rowsByVariant[key].push(entry);
+    try {
+      checkoutRestoreOrderLedgerRows_(
+          sheet,
+          order.orderId,
+          backupRows);
+    } catch (rollbackError) {
+      throw new Error(
+          `${error.message} CRITICAL: order-ledger rollback failed: ` +
+          rollbackError.message);
+    }
+
+    throw error;
+  }
+}
+
+function checkoutWriteOrderRows_(
+    sheet,
+    order,
+    records,
+    existingRows,
+    writeState) {
+
+  const rowsByItemKey = {};
+
+  existingRows.forEach((entry) => {
+    const key = checkoutClean_(entry.itemKey);
+
+    if (!rowsByItemKey[key]) {
+      rowsByItemKey[key] = [];
+    }
+
+    rowsByItemKey[key].push(entry);
   });
 
   const usedRows = {};
   const rowsToAppend = [];
 
   records.forEach((record) => {
-    const variantId = checkoutClean_(
-        record['Shopify Variant GID']);
+    const itemKey = checkoutClean_(record['項目鍵']) ||
+      checkoutLedgerItemKey_(
+          record['訂單模式'],
+          record['來源項目ID'],
+          record['Shopify Variant GID']);
 
-    const candidates = rowsByVariant[variantId] || [];
+    const candidates = rowsByItemKey[itemKey] || [];
     const target = candidates.shift() || null;
 
     if (target) {
@@ -2681,12 +3810,16 @@ function checkoutWriteOrder_(sheet, order) {
       const currentOrderId = checkoutClean_(
           currentRow[target.orderColumn]);
 
-      const currentVariantId = checkoutClean_(
-          currentRow[target.variantColumn]);
+      const currentItemKey = checkoutClean_(
+          currentRow[target.itemKeyColumn]) ||
+        checkoutLedgerItemKey_(
+            currentRow[target.modeColumn],
+            currentRow[target.sourceItemIdColumn],
+            currentRow[target.variantColumn]);
 
       if (
         currentOrderId !== order.orderId ||
-        currentVariantId !== target.variantId
+        currentItemKey !== target.itemKey
       ) {
         throw new Error(
             'The checkout sheet changed while this order was being saved. ' +
@@ -2705,6 +3838,7 @@ function checkoutWriteOrder_(sheet, order) {
                 record,
                 target.preservedValues),
           ]);
+      writeState.applied = true;
 
       usedRows[target.rowNumber] = true;
     } else {
@@ -2722,6 +3856,7 @@ function checkoutWriteOrder_(sheet, order) {
             rowsToAppend.length,
             sheet.getLastColumn())
         .setValues(rowsToAppend);
+    writeState.applied = true;
   }
 
   existingRows
@@ -2729,7 +3864,38 @@ function checkoutWriteOrder_(sheet, order) {
       .sort((left, right) => right.rowNumber - left.rowNumber)
       .forEach((entry) => {
         sheet.deleteRow(entry.rowNumber);
+        writeState.applied = true;
       });
+}
+
+/**
+ * Restores only the affected order after a partial multi-row ledger failure.
+ * The rows may move to the end of the sheet, but their values and formulas are
+ * preserved and unrelated orders are not rewritten.
+ */
+function checkoutRestoreOrderLedgerRows_(
+    sheet,
+    orderId,
+    backupRows) {
+  checkoutFindCurrentOrderRows_(sheet, orderId)
+      .sort((left, right) => right.rowNumber - left.rowNumber)
+      .forEach((entry) => {
+        sheet.deleteRow(entry.rowNumber);
+      });
+
+  if (!backupRows || backupRows.length === 0) {
+    return;
+  }
+
+  const startRow = Math.max(2, sheet.getLastRow() + 1);
+
+  sheet
+      .getRange(
+          startRow,
+          1,
+          backupRows.length,
+          sheet.getLastColumn())
+      .setValues(backupRows);
 }
 
 function checkoutFindCurrentOrderRows_(sheet, orderId) {
@@ -2750,6 +3916,15 @@ function checkoutFindCurrentOrderRows_(sheet, orderId) {
   const variantColumn = checkoutRequiredHeader_(
       index,
       'Shopify Variant GID');
+  const itemKeyColumn = checkoutRequiredHeader_(
+      index,
+      '項目鍵');
+  const modeColumn = checkoutRequiredHeader_(
+      index,
+      '訂單模式');
+  const sourceItemIdColumn = checkoutRequiredHeader_(
+      index,
+      '來源項目ID');
 
   const range = sheet.getRange(
       2,
@@ -2771,7 +3946,15 @@ function checkoutFindCurrentOrderRows_(sheet, orderId) {
       rowNumber: offset + 2,
       orderColumn,
       variantColumn,
-      variantId: checkoutClean_(row[variantColumn]),
+      itemKeyColumn,
+      modeColumn,
+      sourceItemIdColumn,
+      itemKey:
+        checkoutClean_(row[itemKeyColumn]) ||
+        checkoutLedgerItemKey_(
+            row[modeColumn],
+            row[sourceItemIdColumn],
+            row[variantColumn]),
       preservedValues: row.map((value, column) => {
         return formulas[offset][column] || value;
       }),
@@ -2796,6 +3979,7 @@ function checkoutRecordForItem_(order, item) {
 
   return {
     '訂單編號': order.orderId,
+    '訂單模式': checkoutNormalizeMode_(order.mode),
     '訂單狀態': order.status,
     '版本': order.version,
     '草稿鍵': order.draftKey,
@@ -2812,6 +3996,15 @@ function checkoutRecordForItem_(order, item) {
     '顧客電郵': order.customerEmail,
     '付款方式': order.paymentMethod,
     '備註': order.notes,
+    '項目鍵': checkoutLedgerItemKey_(
+        order.mode,
+        item.sourceItemId,
+        item.variantId),
+    '來源工作表': item.sourceSheetName || '',
+    '來源項目ID': item.sourceItemId || '',
+    '中文品名': item.chineseName || '',
+    '來源位置': item.sourceLocation || '',
+    '商品圖片': item.imageUrl || '',
     'Shopify Product GID': item.productId,
     'Shopify Variant GID': item.variantId,
     'Shopify Inventory Item GID': item.inventoryItemId,
@@ -2920,9 +4113,82 @@ function checkoutLoadOrder_(orderId) {
   }
 
   const groups = checkoutReadOrderGroups_();
-  return groups[id]
+  const order = groups[id]
     ? checkoutOrderFromRows_(groups[id])
     : null;
+
+  checkoutAttachLiveMto32Availability_(order);
+  return order;
+}
+
+/**
+ * Adds the current MTO Item Left value when an order is loaded. Ledger history
+ * remains readable even if the market sheet is temporarily unavailable or an
+ * old item was removed; save/cancel still performs strict server validation.
+ */
+function checkoutAttachLiveMto32Availability_(order) {
+  if (
+    !order ||
+    checkoutNormalizeMode_(order.mode) !==
+      CHECKOUT_CONFIG.modes.mto32
+  ) {
+    return;
+  }
+
+  const items = order.items || [];
+
+  items.forEach((item) => {
+    item.available = '';
+    item.liveAvailable = '';
+  });
+
+  try {
+    const catalog = checkoutReadMto32IdentityIndex_(
+        items.map((item) => item.sourceItemId || item.marketItemId));
+
+    items.forEach((item) => {
+      const trusted = catalog.byKey[
+          checkoutMtoItemKey_(item.sourceItemId || item.marketItemId)];
+
+      if (!trusted) {
+        return;
+      }
+
+      const stock = checkoutMtoWholeNumber_(
+          catalog.sheet
+              .getRange(trusted.rowNumber, catalog.columns.stock + 1)
+              .getValue(),
+          'Stock',
+          item.sourceItemId || item.sku);
+      const sold = checkoutMtoWholeNumberDefault_(
+          catalog.sheet
+              .getRange(trusted.rowNumber, catalog.columns.sold + 1)
+              .getValue(),
+          'Sold',
+          item.sourceItemId || item.sku,
+          0);
+      const left = checkoutMtoWholeNumberDefault_(
+          catalog.sheet
+              .getRange(trusted.rowNumber, catalog.columns.left + 1)
+              .getValue(),
+          'Left',
+          item.sourceItemId || item.sku,
+          stock - sold);
+
+      const quantityAlreadyRecorded =
+        order.status !== CHECKOUT_CONFIG.statuses.cancelled &&
+        order.sourceSalesApplied === true
+          ? Number(item.quantity || 0)
+          : 0;
+
+      item.liveAvailable = left;
+      item.available = left + quantityAlreadyRecorded;
+    });
+  } catch (error) {
+    console.warn(
+        `Could not attach live MTO availability for ${order.orderId}: ` +
+        error.message);
+  }
 }
 
 function checkoutFindOrderByDraftKey_(draftKey) {
@@ -2967,10 +4233,23 @@ function checkoutOrderFromRows_(rows) {
       get(base, '收據圖片ID'),
       get(base, '收據圖片名稱'),
       get(base, '收據圖片連結'));
+  const ledgerOrderId = checkoutClean_(
+      get(base, '訂單編號'));
+  const storedMode = checkoutClean_(
+      get(base, '訂單模式'));
+  const historicalSourceItemId = checkoutClean_(
+      get(base, '來源項目ID'));
+  const ledgerMode = storedMode
+    ? checkoutNormalizeMode_(storedMode)
+    : (
+      /^MTO32-/i.test(ledgerOrderId) || historicalSourceItemId
+        ? CHECKOUT_CONFIG.modes.mto32
+        : CHECKOUT_CONFIG.modes.standard
+    );
 
   const order = {
-    orderId:
-      checkoutClean_(get(base, '訂單編號')),
+    orderId: ledgerOrderId,
+    mode: ledgerMode,
     status:
       checkoutClean_(get(base, '訂單狀態')) ||
       CHECKOUT_CONFIG.statuses.active,
@@ -3026,14 +4305,38 @@ function checkoutOrderFromRows_(rows) {
     }),
   };
 
+  order.checkoutMode = order.mode;
+
   order.items = rows.map((entry) => {
     const row = entry.values;
+    const sourceItemId = checkoutClean_(
+        get(row, '來源項目ID'));
+    const variantId = checkoutClean_(
+        get(row, 'Shopify Variant GID'));
 
     return {
+      mode: order.mode,
+      checkoutMode: order.mode,
+      catalogMode: order.mode,
+      itemKey:
+        checkoutClean_(get(row, '項目鍵')) ||
+        checkoutLedgerItemKey_(
+            order.mode,
+            sourceItemId,
+            variantId),
+      sourceSheetName:
+        checkoutClean_(get(row, '來源工作表')),
+      sourceItemId,
+      marketItemId: sourceItemId,
+      sourceLocation:
+        checkoutClean_(get(row, '來源位置')),
+      chineseName:
+        checkoutClean_(get(row, '中文品名')),
+      imageUrl:
+        checkoutClean_(get(row, '商品圖片')),
       productId:
         checkoutClean_(get(row, 'Shopify Product GID')),
-      variantId:
-        checkoutClean_(get(row, 'Shopify Variant GID')),
+      variantId,
       inventoryItemId:
         checkoutClean_(get(row, 'Shopify Inventory Item GID')),
       tracked:
@@ -3280,7 +4583,14 @@ function checkoutTrashFilesByName_(folder, fileName) {
   }
 }
 
-function checkoutOrderId_(date, draftKey) {
+function checkoutOrderId_(date, draftKey, mode) {
+  if (
+    checkoutNormalizeMode_(mode) ===
+    CHECKOUT_CONFIG.modes.mto32
+  ) {
+    return checkoutNextMto32OrderId_();
+  }
+
   const datePart = Utilities.formatDate(
       date,
       Session.getScriptTimeZone(),
@@ -3292,6 +4602,111 @@ function checkoutOrderId_(date, draftKey) {
       .toUpperCase();
 
   return `MYK-${datePart}-${suffix}`;
+}
+
+function checkoutNextMto32OrderId_() {
+  const groups = checkoutReadOrderGroups_();
+  const properties = PropertiesService.getScriptProperties();
+  const pattern = new RegExp(
+      `^${CHECKOUT_CONFIG.mto32.orderPrefix}-(\\d+)$`,
+      'i');
+  let maximum = Number(
+      properties.getProperty(
+          CHECKOUT_CONFIG.mto32.sequenceProperty) || 0);
+
+  if (!Number.isInteger(maximum) || maximum < 0) {
+    maximum = 0;
+  }
+
+  Object.keys(groups).forEach((orderId) => {
+    const match = checkoutClean_(orderId).match(pattern);
+
+    if (match) {
+      maximum = Math.max(maximum, Number(match[1]) || 0);
+    }
+  });
+
+  let sequence = maximum;
+  let orderId = '';
+
+  do {
+    sequence += 1;
+    orderId = `${CHECKOUT_CONFIG.mto32.orderPrefix}-` +
+      String(sequence).padStart(2, '0');
+  } while (Object.prototype.hasOwnProperty.call(groups, orderId));
+
+  properties.setProperty(
+      CHECKOUT_CONFIG.mto32.sequenceProperty,
+      String(sequence));
+
+  return orderId;
+}
+
+function checkoutNormalizeMode_(value) {
+  const mode = checkoutClean_(value).toUpperCase();
+
+  if (!mode || mode === CHECKOUT_CONFIG.modes.standard) {
+    return CHECKOUT_CONFIG.modes.standard;
+  }
+
+  if (mode === CHECKOUT_CONFIG.modes.mto32) {
+    return CHECKOUT_CONFIG.modes.mto32;
+  }
+
+  throw new Error(`Unsupported checkout mode: ${value}`);
+}
+
+function checkoutMtoItemKey_(value) {
+  const id = checkoutClean_(value);
+
+  return id ? `MTO32:${id.toUpperCase()}` : '';
+}
+
+function checkoutLedgerItemKey_(mode, sourceItemId, variantId) {
+  if (
+    checkoutNormalizeMode_(mode) ===
+    CHECKOUT_CONFIG.modes.mto32
+  ) {
+    return checkoutMtoItemKey_(sourceItemId);
+  }
+
+  const gid = checkoutClean_(variantId);
+  return gid ? `SHOPIFY:${gid}` : '';
+}
+
+function checkoutMtoWholeNumber_(value, field, sourceItemId) {
+  const text = checkoutClean_(value).replace(/,/g, '');
+  const number = Number(text);
+
+  if (
+    text === '' ||
+    !Number.isInteger(number) ||
+    number < 0
+  ) {
+    throw new Error(
+        `${field} must be a non-negative whole number for MTO item ` +
+        `${sourceItemId}.`);
+  }
+
+  return number;
+}
+
+function checkoutMtoWholeNumberDefault_(
+    value,
+    field,
+    sourceItemId,
+    defaultValue) {
+  if (checkoutClean_(value) === '') {
+    return checkoutMtoWholeNumber_(
+        defaultValue,
+        field,
+        sourceItemId);
+  }
+
+  return checkoutMtoWholeNumber_(
+      value,
+      field,
+      sourceItemId);
 }
 
 function checkoutUuidFromText_(value) {
