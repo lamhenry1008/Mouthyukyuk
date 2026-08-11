@@ -138,6 +138,7 @@ const MYK_TAXONOMY = Object.freeze({
   productTypeSearchTerms: Object.freeze({
     'INK': 'Pen Ink & Refills',
     'FOUNTAIN PEN INK': 'Pen Ink & Refills',
+    'CALLIGRAPHY INK': 'Pen Ink & Refills',
     'GLITTER POTION': 'Pen Ink & Refills',
     'FOUNTAIN PEN': 'Fountain Pens',
     'DIP PEN': 'Dip Pens',
@@ -893,6 +894,7 @@ function initializeReviewBuildFromActiveSheet_() {
   // Permanent Shopify identities are copied into the review and later filled
   // by preflight or upload when they are missing.
   ensureSourceShopifyIdentityColumns_(sourceSheet);
+  const sourceResultIndices = ensureSourceResultColumns_(sourceSheet);
 
   const lastSourceRow = sourceSheet.getLastRow();
 
@@ -927,6 +929,7 @@ function initializeReviewBuildFromActiveSheet_() {
     stagingSheetId: stagingSheet.getSheetId(),
     stagingSheetName,
     taxonomyColumnIndex,
+    uploadResultColumnIndex: sourceResultIndices.upload_result,
     nextRow: 2,
     lastSourceRow,
     totalRows: lastSourceRow - 1,
@@ -1012,9 +1015,20 @@ function processReviewBuildBatch(jobId) {
         state.lastSourceRow,
         startRow + MYK_REVIEW_BUILD.batchSize - 1);
 
+    const profile = requireSheetProfile_(state.sourceSheetName);
+    // Resolve operational columns by their current headings for every batch.
+    // This prevents a column inserted during a long build from shifting a
+    // stored numeric index and receiving taxonomy or result values.
+    const taxonomyColumnIndex = ensureSourceTaxonomyColumn_(
+        sourceSheet,
+        profile);
+    const sourceResultIndices = ensureSourceResultColumns_(sourceSheet);
+    const uploadResultColumnIndex = sourceResultIndices.upload_result;
+    state.taxonomyColumnIndex = taxonomyColumnIndex;
+    state.uploadResultColumnIndex = uploadResultColumnIndex;
+
     const sourceLastColumn = sourceSheet.getLastColumn();
     const sourceIndices = getColumnIndices(sourceSheet);
-    const profile = requireSheetProfile_(state.sourceSheetName);
     const batchValues = sourceSheet
         .getRange(
             startRow,
@@ -1024,6 +1038,7 @@ function processReviewBuildBatch(jobId) {
         .getDisplayValues();
     const stagingRows = [];
     const taxonomyValues = [];
+    const sourceResultValues = [];
     let batchReviewRows = 0;
     let batchBlockedRows = 0;
     let rowsHandled = 0;
@@ -1040,12 +1055,15 @@ function processReviewBuildBatch(jobId) {
       const row = batchValues[offset];
       const sourceRowNumber = startRow + offset;
       const currentTaxonomy = clean_(
-          row[state.taxonomyColumnIndex]);
+          row[taxonomyColumnIndex]);
+      const previousSourceResult = clean_(
+          row[uploadResultColumnIndex]);
 
       if (row.every((value) => !clean_(value))) {
         stagingRows.push(
             new Array(MYK_SHOPIFY.resultHeaders.length).fill(''));
         taxonomyValues.push([currentTaxonomy]);
+        sourceResultValues.push([previousSourceResult]);
         rowsHandled += 1;
         continue;
       }
@@ -1085,6 +1103,9 @@ function processReviewBuildBatch(jobId) {
         taxonomyValues.push([
           product.taxonomyCategoryId || currentTaxonomy,
         ]);
+        sourceResultValues.push([
+          reviewBuildSourceResult_(validation, previousSourceResult),
+        ]);
         batchReviewRows += 1;
 
         if (normalize_(validation).indexOf('BLOCKED:') === 0) {
@@ -1101,6 +1122,11 @@ function processReviewBuildBatch(jobId) {
             profile,
             failureMessage));
         taxonomyValues.push([currentTaxonomy]);
+        sourceResultValues.push([
+          reviewBuildSourceResult_(
+              `BLOCKED: REVIEW_BUILD_ERROR: ${failureMessage}`,
+              previousSourceResult),
+        ]);
         batchReviewRows += 1;
         batchBlockedRows += 1;
       }
@@ -1127,10 +1153,17 @@ function processReviewBuildBatch(jobId) {
     sourceSheet
         .getRange(
             startRow,
-            state.taxonomyColumnIndex + 1,
+            taxonomyColumnIndex + 1,
             taxonomyValues.length,
             1)
         .setValues(taxonomyValues);
+    sourceSheet
+        .getRange(
+            startRow,
+            uploadResultColumnIndex + 1,
+            sourceResultValues.length,
+            1)
+        .setValues(sourceResultValues);
 
     state.processedRows += rowsHandled;
     state.reviewRows += batchReviewRows;
@@ -1463,6 +1496,62 @@ function buildReviewErrorRow_(
     failureMessage,
     '',
   ];
+}
+
+/**
+ * Chooses what the review build writes back to the source Upload Result.
+ *
+ * The builder may replace only blank or builder-owned results. This clears a
+ * stale local validation block when the row becomes valid, while deliberately
+ * preserving Shopify identity/preflight failures and completed upload audit
+ * messages that the read-only build is not qualified to erase.
+ */
+function reviewBuildSourceResult_(validation, previousResult) {
+  const current = clean_(validation);
+  const normalizedCurrent = normalize_(current);
+  const previous = clean_(previousResult);
+
+  if (
+    previous &&
+    !isReviewBuildOwnedSourceResult_(previous)
+  ) {
+    return previous;
+  }
+
+  if (
+    normalizedCurrent === 'READY_FOR_SHOPIFY_CHECK' ||
+    normalizedCurrent.indexOf('BLOCKED:') === 0
+  ) {
+    return current;
+  }
+
+  return previous;
+}
+
+/** Returns true when the review builder owns the source result value. */
+function isReviewBuildOwnedSourceResult_(value) {
+  const normalized = normalize_(value);
+
+  return (
+    normalized === 'READY_FOR_SHOPIFY_CHECK' ||
+    isLocalReviewValidationResult_(normalized)
+  );
+}
+
+/** Returns true only for an Upload Result owned by local review validation. */
+function isLocalReviewValidationResult_(value) {
+  const normalized = normalize_(value);
+
+  if (normalized.indexOf('BLOCKED:') !== 0) {
+    return false;
+  }
+
+  return (
+    normalized.indexOf('REVIEW_BUILD_ERROR') !== -1 ||
+    normalized.indexOf('MISSING_') !== -1 ||
+    normalized.indexOf('INVALID_') !== -1 ||
+    normalized.indexOf('SKU_MUST_HAVE_') !== -1
+  );
 }
 
 function reviewBuildStateKey_(jobId) {
@@ -6199,8 +6288,16 @@ function parseList_(value) {
 }
 
 function parseMoney_(value) {
-  const parsed = Number(
-      clean_(value).replace(/[,HK$\s]/gi, ''));
+  const text = clean_(value)
+      .replace(/HKD/gi, '')
+      .replace(/HK\$/gi, '')
+      .replace(/[,$\s]/g, '');
+
+  if (!text) {
+    return NaN;
+  }
+
+  const parsed = Number(text);
 
   return Number.isFinite(parsed)
     ? parsed
