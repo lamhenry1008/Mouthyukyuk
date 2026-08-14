@@ -606,7 +606,7 @@
         <input
           id="mto-bulk-location"
           list="mto-location-options"
-          placeholder="大篋, 細篋, or another location"
+          placeholder="Choose from..."
         >
       </div>
       <button onclick="applyMtoLocationToSelected()">
@@ -719,6 +719,10 @@
     }
 
     const clientClean = (value) => String(value ?? '').trim();
+
+    function isMtoLocationPlaceholder(value) {
+      return clientClean(value).toLowerCase() === 'choose from...';
+    }
 
     function normalizeMtoItemId(value) {
       return clientClean(value).toUpperCase();
@@ -847,11 +851,11 @@
         location: clientClean(
           source.location || source.itemLocation || source.sourceLocation
         ),
-        stock: source.stock == null
-          ? (
-            source.inventory == null
-              ? ''
-              : clientClean(source.inventory)
+        stock: source.stock == null || clientClean(source.stock) === ''
+          ? String(
+            Number(
+              mtoBulk.bootstrap && mtoBulk.bootstrap.defaultStock
+            ) || 0
           )
           : clientClean(source.stock),
         imageUrl: mtoBulkImageText(
@@ -891,7 +895,7 @@
         '大篋',
         '細篋',
         ...mtoBulk.locations,
-      ]);
+      ]).filter((location) => !isMtoLocationPlaceholder(location));
 
       datalist.innerHTML = mtoBulk.locations.map((location) => {
         return `<option value="${esc(location)}"></option>`;
@@ -950,6 +954,7 @@
     async function openMtoBulkEditor() {
       const view = document.getElementById('mto-bulk-view');
       view.hidden = false;
+      document.getElementById('mto-bulk-location').value = '';
       mtoBulk.loading = true;
       setMtoBulkMessage(
         'mto-bulk-load-summary',
@@ -1174,7 +1179,10 @@
         addError('price', 'Price must be zero or a positive number.');
       }
 
-      if (!clientClean(row.location)) {
+      if (
+        !clientClean(row.location) ||
+        isMtoLocationPlaceholder(row.location)
+      ) {
         addError('location', 'Choose or enter a location.');
       }
 
@@ -1337,6 +1345,7 @@
               <input
                 list="mto-location-options"
                 value="${esc(row.location)}"
+                placeholder="Choose from..."
                 ${row.saved || mtoBulk.saving ? 'readonly' : ''}
                 oninput="updateMtoBulkRow(${index}, 'location', this.value)"
               >
@@ -1548,7 +1557,7 @@
         return row.selected && !row.saved;
       });
 
-      if (!location) {
+      if (!location || isMtoLocationPlaceholder(location)) {
         alert('Choose 大篋, 細篋, or enter another location first.');
         return;
       }
@@ -1693,6 +1702,36 @@
             'error'
           );
           return;
+        }
+
+        if (!result || result.ok !== true) {
+          throw new Error(
+            'The MTO save returned an incomplete response. Reload ' +
+            'MTO 32 Summary before trying again; the copy may have completed.'
+          );
+        }
+
+        const writtenRows = Array.isArray(result.targetRows)
+          ? result.targetRows
+          : [];
+        const expectedIds = payloadRows
+          .map((row) => normalizeMtoItemId(row.itemId))
+          .sort();
+        const writtenIds = writtenRows
+          .map((row) => normalizeMtoItemId(row && row.itemId))
+          .filter(Boolean)
+          .sort();
+
+        if (
+          Number(result.createdCount) !== payloadRows.length ||
+          writtenRows.length !== payloadRows.length ||
+          expectedIds.join('\n') !== writtenIds.join('\n')
+        ) {
+          throw new Error(
+            'Shopify Editor could not verify every copied MTO row. ' +
+            'Reload MTO 32 Summary before retrying so duplicate items are ' +
+            'not created.'
+          );
         }
 
         selected.forEach((row) => {
@@ -1866,13 +1905,40 @@
     const itemTypeCodes = Object.freeze({
       'INK': 'INK',
       'FOUNTAIN PEN INK': 'INK',
-      'GLITTER POTION': 'INK',
+      'CALLIGRAPHY INK': 'INK',
+      'GLITTER POTION': 'GP',
+      'GP': 'GP',
       'FOUNTAIN PEN': 'PEN',
       'DIP PEN': 'PEN',
+      'BALLPOINT PEN': 'PEN',
+      'ROLLERBALL PEN': 'PEN',
+      'GEL PEN': 'PEN',
+      'PENCIL': 'PEN',
+      'MECHANICAL PENCIL': 'PEN',
       'NOTEBOOK': 'NOTEBOOK',
       'PAPER': 'PAPER',
       'ACCESSORY': 'ACCESSORY',
     });
+
+    function editorFieldFamily() {
+      const sheetName = String(
+        model && model.targetSheetName || ''
+      ).trim();
+
+      if (sheetName === '墨水') {
+        return 'INK';
+      }
+
+      if (sheetName === '閃粉') {
+        return 'GLITTER_POTION';
+      }
+
+      if (sheetName === '鋼筆' || sheetName === '原子筆/鉛筆') {
+        return 'PEN';
+      }
+
+      return 'GENERIC';
+    }
 
     function buildAutomaticItemId(productType, sku) {
       const typeKey = String(productType || '')
@@ -1881,9 +1947,17 @@
         .replace(/\s+/g, ' ')
         .toUpperCase();
 
-      const typeCode = itemTypeCodes[typeKey] || typeKey
-        .replace(/[^A-Z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
+      const fieldFamily = editorFieldFamily();
+      const sheetTypeCode = fieldFamily === 'GLITTER_POTION'
+        ? 'GP'
+        : (
+          fieldFamily === 'INK' || fieldFamily === 'PEN'
+            ? fieldFamily
+            : ''
+        );
+      const typeCode = sheetTypeCode || itemTypeCodes[typeKey] || typeKey
+          .replace(/[^A-Z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
 
       const skuCode = String(sku || '')
         .trim()
@@ -2071,6 +2145,9 @@
         return;
       }
 
+      const fieldFamily = editorFieldFamily();
+      const isInkSheet = fieldFamily === 'INK';
+
       model.collection = (model.title || '').includes(' - ')
         ? model.title.split(' - ')[0].trim()
         : (model.title || '');
@@ -2141,13 +2218,15 @@
             editorOptions.storageLocations,
             1
           )}
-          ${datalistField(
-            'inkSize',
-            'Ink Size',
-            model.inkSize || '',
-            editorOptions.inkSizes,
-            1
-          )}
+          ${isInkSheet
+            ? datalistField(
+              'inkSize',
+              'Ink Size',
+              model.inkSize || '',
+              editorOptions.inkSizes,
+              1
+            )
+            : ''}
           ${datalistField(
             'targetSheetName',
             'Sheet',
@@ -2164,27 +2243,31 @@
             4
           )}
 
-          ${multiChoiceField(
-            'baseColors',
-            'Ink Base Color',
-            model.baseColors || [],
-            editorOptions.baseColors,
-            2
-          )}
-          ${multiChoiceField(
-            'glitterColors',
-            'Ink Glitter Color',
-            model.glitterColors || [],
-            editorOptions.glitterColors,
-            1
-          )}
-          ${multiChoiceField(
-            'sheenColors',
-            'Ink Sheen Color',
-            model.sheenColors || [],
-            editorOptions.sheenColors,
-            1
-          )}
+          ${isInkSheet
+            ? `
+              ${multiChoiceField(
+                'baseColors',
+                'Ink Base Color',
+                model.baseColors || [],
+                editorOptions.baseColors,
+                2
+              )}
+              ${multiChoiceField(
+                'glitterColors',
+                'Ink Glitter Color',
+                model.glitterColors || [],
+                editorOptions.glitterColors,
+                1
+              )}
+              ${multiChoiceField(
+                'sheenColors',
+                'Ink Sheen Color',
+                model.sheenColors || [],
+                editorOptions.sheenColors,
+                1
+              )}
+            `
+            : ''}
 
           ${field(
             'descriptionHtml',
@@ -2210,6 +2293,16 @@
               .map((value) => `<option value="${esc(value)}"></option>`)
               .join('')}
         </datalist>
+        <datalist id="pen-base-color-options">
+          ${(editorOptions.penBaseColors || [])
+              .map((value) => `<option value="${esc(value)}"></option>`)
+              .join('')}
+        </datalist>
+        <datalist id="pen-size-options">
+          ${(editorOptions.penSizes || [])
+              .map((value) => `<option value="${esc(value)}"></option>`)
+              .join('')}
+        </datalist>
 
         <button onclick="addVariant()">+ Add variant</button>
         ${
@@ -2228,11 +2321,23 @@
             onchange="uploadFiles(this.files)"
           >
           <div>
-            Images are resized to a maximum 2048 px edge and saved as JPEG.
+            Select a linked Drive image below, or upload a new file. New files
+            are resized to a maximum 2048 px edge and saved as JPEG.
           </div>
           ${
             errors.images
               ? `<div class="error">${esc(errors.images)}</div>`
+              : ''
+          }
+          ${
+            (model.sourceImageErrors || []).length
+              ? `
+                <div class="error">
+                  Sheet image warning: ${esc(
+                    model.sourceImageErrors.join(' | ')
+                  )}
+                </div>
+              `
               : ''
           }
         </div>
@@ -2273,6 +2378,9 @@
 
     function variantHtml(variant, index) {
       const inventoryError = errors[`variant_${index}_inventory`];
+      const fieldFamily = editorFieldFamily();
+      const isGlitterPotionSheet = fieldFamily === 'GLITTER_POTION';
+      const isPenSheet = fieldFamily === 'PEN';
 
       return `
         <div class="variant">
@@ -2352,47 +2460,106 @@
             >
           </div>
 
-          <div class="field ${
-            errors[`variant_${index}_glitterPotionColor`] ? 'invalid' : ''
-          }">
-            <label>Glitter Potion Color</label>
+          <div>
+            <label>Option</label>
             <input
-              list="glitter-potion-color-options"
               data-v="${index}"
-              data-vkey="glitterPotionColor"
-              value="${esc(variant.glitterPotionColor || '')}"
+              data-vkey="sheetOption"
+              value="${esc(variant.sheetOption || '')}"
+              placeholder="Optional variant value"
             >
-            ${
-              errors[`variant_${index}_glitterPotionColor`]
-                ? `<div class="error">Required</div>`
-                : ''
-            }
           </div>
 
-          <div class="field ${
-            errors[`variant_${index}_glitterPotionSize`] ? 'invalid' : ''
-          }">
-            <label>Glitter Potion Size</label>
-            <input
-              list="glitter-potion-size-options"
-              data-v="${index}"
-              data-vkey="glitterPotionSize"
-              value="${esc(variant.glitterPotionSize || '')}"
-            >
-            ${
-              errors[`variant_${index}_glitterPotionSize`]
-                ? `<div class="error">Required</div>`
-                : ''
-            }
-          </div>
+          ${isGlitterPotionSheet
+            ? `
+              <div class="field ${
+                errors[`variant_${index}_glitterPotionColor`]
+                  ? 'invalid'
+                  : ''
+              }">
+                <label>Glitter Potion Color</label>
+                <input
+                  list="glitter-potion-color-options"
+                  data-v="${index}"
+                  data-vkey="glitterPotionColor"
+                  value="${esc(variant.glitterPotionColor || '')}"
+                >
+                ${errors[`variant_${index}_glitterPotionColor`]
+                  ? '<div class="error">Required</div>'
+                  : ''}
+              </div>
+
+              <div class="field ${
+                errors[`variant_${index}_glitterPotionSize`]
+                  ? 'invalid'
+                  : ''
+              }">
+                <label>Glitter Potion Size</label>
+                <input
+                  list="glitter-potion-size-options"
+                  data-v="${index}"
+                  data-vkey="glitterPotionSize"
+                  value="${esc(variant.glitterPotionSize || '')}"
+                >
+                ${errors[`variant_${index}_glitterPotionSize`]
+                  ? '<div class="error">Required</div>'
+                  : ''}
+              </div>
+            `
+            : ''}
+
+          ${isPenSheet
+            ? `
+              <div class="field ${
+                errors[`variant_${index}_penBaseColor`] ? 'invalid' : ''
+              }">
+                <label>Pen Base Color</label>
+                <input
+                  list="pen-base-color-options"
+                  data-v="${index}"
+                  data-vkey="penBaseColor"
+                  value="${esc(variant.penBaseColor || '')}"
+                >
+                ${errors[`variant_${index}_penBaseColor`]
+                  ? '<div class="error">Required</div>'
+                  : ''}
+              </div>
+
+              <div class="field ${
+                errors[`variant_${index}_penSize`] ? 'invalid' : ''
+              }">
+                <label>Pen Size</label>
+                <input
+                  list="pen-size-options"
+                  data-v="${index}"
+                  data-vkey="penSize"
+                  value="${esc(variant.penSize || '')}"
+                >
+                ${errors[`variant_${index}_penSize`]
+                  ? '<div class="error">Required</div>'
+                  : ''}
+              </div>
+            `
+            : ''}
 
           <div>
-            <label>Options (Name=Value)</label>
+            <label>Other Options (Name=Value)</label>
             <input
               data-v="${index}"
               data-vkey="optionsText"
               value="${esc(
                 (variant.optionValues || [])
+                  .filter((option) => {
+                    return ![
+                      'OPTION',
+                      'GLITTER POTION COLOR',
+                      'GLITTER POTION SIZE',
+                      'PEN BASE COLOR',
+                      'PEN SIZE',
+                    ].includes(
+                      String(option.optionName || '').trim().toUpperCase()
+                    );
+                  })
                   .map((option) => {
                     return `${option.optionName}=${option.name}`;
                   })
@@ -2442,12 +2609,40 @@
           ${
             image.source === 'DRIVE'
               ? `
-                <button
-                  class="danger"
-                  onclick="removeImage('${image.id}')"
-                >
-                  Remove Drive file
-                </button>
+                ${
+                  image.sourceReferenced === true
+                    ? '<small>Linked from product sheet</small>'
+                    : '<small>Managed Drive image</small>'
+                }
+                <label class="checkbox-label">
+                  <input
+                    type="checkbox"
+                    ${image.pendingUpload === true ? 'checked' : ''}
+                    onchange="setDriveImageForShopify('${esc(image.id)}', this.checked)"
+                  >
+                  ${
+                    (model.images || []).length
+                      ? 'Upload another copy to Shopify on save'
+                      : 'Upload to Shopify on save'
+                  }
+                </label>
+                ${
+                  image.managedFolder === true &&
+                  image.sourceReferenced !== true
+                    ? `
+                      <button
+                        class="danger"
+                        onclick="removeImage('${esc(image.id)}')"
+                      >
+                        Remove Drive file
+                      </button>
+                    `
+                    : `
+                      <small>
+                        Remove this link in the product sheet to stop using it.
+                      </small>
+                    `
+                }
               `
               : `
                 <small>Shopify media</small>
@@ -2506,7 +2701,16 @@
         };
 
         element.oninput = update;
-        element.onchange = update;
+        element.onchange = () => {
+          update();
+
+          if (
+            element.dataset.key === 'targetSheetName' ||
+            element.dataset.key === 'productType'
+          ) {
+            render();
+          }
+        };
       });
 
       document.querySelectorAll('[data-list-key]').forEach((element) => {
@@ -2597,6 +2801,9 @@
         writeInventory: true,
         glitterPotionColor: '',
         glitterPotionSize: '',
+        penBaseColor: '',
+        penSize: '',
+        sheetOption: '',
         optionValues: [],
       });
 
@@ -2680,7 +2887,37 @@
             pendingIds.add(result.image.id);
           }
 
-          model.driveImages = (result.all || []).map((image) => {
+          const previousById = (model.driveImages || []).reduce(
+            (byId, image) => {
+              byId[image.id] = image;
+              return byId;
+            },
+            {}
+          );
+          const returnedIds = new Set();
+          const mergedReturned = (result.all || []).map((image) => {
+            returnedIds.add(image.id);
+            const previous = previousById[image.id] || {};
+
+            return Object.assign({}, previous, image, {
+              managedFolder:
+                previous.managedFolder === true ||
+                image.managedFolder === true,
+              sourceReferenced:
+                previous.sourceReferenced === true ||
+                image.sourceReferenced === true,
+              sourceRefs:
+                previous.sourceRefs || image.sourceRefs || [],
+            });
+          });
+          const unreturnedImages = (model.driveImages || []).filter(
+            (image) => !returnedIds.has(image.id)
+          );
+
+          model.driveImages = [
+            ...mergedReturned,
+            ...unreturnedImages,
+          ].map((image) => {
             return Object.assign({}, image, {
               pendingUpload: pendingIds.has(image.id),
             });
@@ -2722,6 +2959,24 @@
       } finally {
         setBusy(false);
       }
+    }
+
+    function setDriveImageForShopify(id, selected) {
+      const image = (model.driveImages || []).find((candidate) => {
+        return candidate.id === id;
+      });
+
+      if (!image) {
+        return;
+      }
+
+      image.pendingUpload = selected === true;
+
+      if (image.pendingUpload) {
+        delete errors.images;
+      }
+
+      render();
     }
 
     function removeShopifyImage(id) {
@@ -2768,16 +3023,41 @@
           return;
         }
 
+        const resultWarnings = result.warnings || [];
+        const imageFailure = resultWarnings.find((warning) => {
+          return warning.indexOf('IMAGE_UPLOAD_FAILED:') === 0;
+        });
+        const imageProcessing = resultWarnings.find((warning) => {
+          return warning.indexOf('IMAGE_UPLOAD_PROCESSING:') === 0;
+        });
+
         model = result.product;
         errors = {};
+
+        if (imageFailure) {
+          errors.images = imageFailure;
+        }
+
         render();
 
-        const warningText = (result.warnings || []).length
-          ? `\n\nWarnings:\n${result.warnings.join('\n')}`
+        if (imageFailure) {
+          document.getElementById('status').textContent =
+            'Product data saved; image upload failed';
+        } else if (imageProcessing) {
+          document.getElementById('status').textContent =
+            'Product saved; Shopify is processing the image';
+        }
+
+        const warningText = resultWarnings.length
+          ? `\n\nWarnings:\n${resultWarnings.join('\n')}`
           : '';
 
         alert(
-          `Saved. Sheet rows: ${result.written.join(', ')}${warningText}`
+          `${
+            imageFailure
+              ? 'Product data saved, but the image upload failed.'
+              : 'Saved.'
+          } Sheet rows: ${result.written.join(', ')}${warningText}`
         );
       } catch (error) {
         alert(error.message || error);

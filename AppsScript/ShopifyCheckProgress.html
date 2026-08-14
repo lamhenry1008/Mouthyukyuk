@@ -5,6 +5,7 @@
     <base target="_top">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Shopify check progress</title>
     <style>
       :root {
         color-scheme: light;
@@ -74,6 +75,11 @@
         color: var(--danger);
       }
 
+      .stage.waiting {
+        background: var(--warning-soft);
+        color: var(--warning);
+      }
+
       .progress-header {
         display: flex;
         justify-content: space-between;
@@ -112,10 +118,14 @@
         background: var(--danger);
       }
 
+      .bar.waiting {
+        background: var(--warning);
+      }
+
       .stats {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 8px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 7px;
         margin-top: 14px;
       }
 
@@ -124,7 +134,8 @@
         border: 1px solid var(--border);
         border-radius: 8px;
         background: var(--surface-muted);
-        padding: 8px 9px;
+        padding: 8px 7px;
+        text-align: center;
       }
 
       .stat-value {
@@ -248,19 +259,19 @@
   <body>
     <main class="app">
       <div class="heading">
-        <h1>Building Shopify review</h1>
+        <h1>Checking Shopify</h1>
         <span id="stage" class="stage">PREPARING</span>
       </div>
 
       <div class="progress-header">
-        <span id="rowProgress">Preparing source rows…</span>
+        <span id="rowProgress">Preparing review rows…</span>
         <strong id="percentage">0%</strong>
       </div>
 
       <div
         class="track"
         role="progressbar"
-        aria-label="Build review progress"
+        aria-label="Shopify check progress"
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow="0"
@@ -271,15 +282,19 @@
       <div class="stats">
         <div class="stat">
           <span id="processed" class="stat-value">0</span>
-          <span class="stat-label">Processed</span>
+          <span class="stat-label">Checked</span>
         </div>
         <div class="stat">
-          <span id="reviewRows" class="stat-value">0</span>
-          <span class="stat-label">Review rows</span>
+          <span id="readyRows" class="stat-value">0</span>
+          <span class="stat-label">Ready</span>
         </div>
         <div class="stat">
           <span id="blockedRows" class="stat-value">0</span>
           <span class="stat-label">Blocked</span>
+        </div>
+        <div class="stat">
+          <span id="failedRows" class="stat-value">0</span>
+          <span class="stat-label">Failed</span>
         </div>
       </div>
 
@@ -288,11 +303,11 @@
         <div id="currentItem" class="detail-value">Waiting to start…</div>
       </div>
 
-      <div id="message" class="message">Preparing the review build.</div>
+      <div id="message" class="message">Preparing Shopify checks.</div>
       <div id="error" class="error" role="alert"></div>
 
       <div class="footer">
-        <span id="hint" class="hint">Keep this window open while the review is building.</span>
+        <span id="hint" class="hint">Keep this window open while Shopify is being checked.</span>
         <div class="actions">
           <button id="cancelButton" type="button">Cancel</button>
           <button id="closeButton" type="button" disabled>Close</button>
@@ -319,8 +334,9 @@
         track: document.querySelector('.track'),
         bar: document.getElementById('bar'),
         processed: document.getElementById('processed'),
-        reviewRows: document.getElementById('reviewRows'),
+        readyRows: document.getElementById('readyRows'),
         blockedRows: document.getElementById('blockedRows'),
+        failedRows: document.getElementById('failedRows'),
         currentItem: document.getElementById('currentItem'),
         message: document.getElementById('message'),
         error: document.getElementById('error'),
@@ -349,7 +365,6 @@
 
         percentage = Math.max(0, Math.min(100, percentage));
 
-        // Final sheet formatting still takes a moment after all rows are read.
         if (!TERMINAL_STAGES.has(stage) && percentage >= 100) {
           percentage = 99;
         }
@@ -362,12 +377,14 @@
           stage,
           totalRows,
           processedRows,
-          reviewRows: toNumber(progress.reviewRows),
+          readyRows: toNumber(progress.readyRows),
           blockedRows: toNumber(progress.blockedRows),
+          failedRows: toNumber(progress.failedRows),
           percentage,
           currentItem: String(progress.currentItem || ''),
           message: String(progress.message || ''),
           error: String(progress.error || ''),
+          retryAfterMs: Math.max(0, toNumber(progress.retryAfterMs)),
         };
       }
 
@@ -375,17 +392,29 @@
         return TERMINAL_STAGES.has(String(stage || '').toUpperCase());
       }
 
+      function shouldRender(progress) {
+        if (!latestProgress) {
+          return true;
+        }
+
+        if (isTerminal(latestProgress.stage)) {
+          return progress.stage === latestProgress.stage;
+        }
+
+        if (!isTerminal(progress.stage) &&
+            progress.processedRows < latestProgress.processedRows) {
+          return false;
+        }
+
+        return true;
+      }
+
       function render(value) {
         const progress = normalizeProgress(value);
 
-        // Polling and batch calls are asynchronous. Ignore an older polling
-        // response if a newer response has already completed or cancelled the
-        // job, otherwise the dialog can visually jump back to BUILDING.
-        if (
-          latestProgress &&
-          isTerminal(latestProgress.stage) &&
-          !isTerminal(progress.stage)
-        ) {
+        // Polling and batch requests may finish out of order. Never let an old
+        // response move the counter backwards or reopen a terminal job.
+        if (!shouldRender(progress)) {
           return;
         }
 
@@ -399,16 +428,17 @@
         elements.track.setAttribute('aria-valuenow', String(progress.percentage));
         elements.percentage.textContent = progress.percentage + '%';
         elements.processed.textContent = progress.processedRows;
-        elements.reviewRows.textContent = progress.reviewRows;
+        elements.readyRows.textContent = progress.readyRows;
         elements.blockedRows.textContent = progress.blockedRows;
+        elements.failedRows.textContent = progress.failedRows;
 
         elements.rowProgress.textContent = progress.totalRows > 0
-          ? progress.processedRows + ' of ' + progress.totalRows + ' source rows'
-          : 'Preparing source rows…';
+          ? progress.processedRows + ' of ' + progress.totalRows + ' review rows'
+          : 'Preparing review rows…';
 
         elements.currentItem.textContent = progress.currentItem || (
           progress.stage === 'COMPLETE'
-            ? 'Review sheet is ready.'
+            ? 'Shopify checks are complete.'
             : 'Waiting for the next row…'
         );
 
@@ -421,26 +451,35 @@
           stopPolling();
           elements.cancelButton.disabled = true;
           elements.closeButton.disabled = false;
-          elements.hint.textContent = progress.stage === 'COMPLETE'
-            ? 'The Shopify review sheet is ready.'
-            : 'The build has stopped. Check the message above.';
+
+          if (progress.stage === 'COMPLETE') {
+            elements.hint.textContent = progress.failedRows > 0
+              ? 'The check is complete. Failed rows can be checked again later.'
+              : 'The checked rows are ready for approval.';
+          } else if (progress.stage === 'CANCELLED') {
+            elements.hint.textContent =
+              'The check stopped. Completed row results were kept.';
+          } else {
+            elements.hint.textContent =
+              'The check stopped. Close this window and try Check Shopify again.';
+          }
         }
       }
 
       function defaultMessage(stage) {
         switch (stage) {
-          case 'BUILDING':
-            return 'Reading and validating source products.';
-          case 'FINALIZING':
-            return 'Formatting the Shopify review sheet.';
+          case 'CHECKING':
+            return 'Looking up Shopify products and variants.';
+          case 'WAITING':
+            return 'Waiting for the current check batch to finish.';
           case 'COMPLETE':
-            return 'Review build completed.';
+            return 'Shopify checks completed.';
           case 'FAILED':
-            return 'Review build failed.';
+            return 'Shopify checking failed.';
           case 'CANCELLED':
-            return 'Review build cancelled.';
+            return 'Shopify checking was cancelled.';
           default:
-            return 'Preparing the review build.';
+            return 'Preparing Shopify checks.';
         }
       }
 
@@ -452,7 +491,7 @@
         render({
           ...(latestProgress || {}),
           stage: 'FAILED',
-          message: 'The review worker could not continue.',
+          message: 'The Shopify check worker could not continue.',
           error: message,
         });
       }
@@ -479,15 +518,20 @@
 
               if (cancelRequested) {
                 sendCancel();
-              } else if (!clientStopped && !isTerminal(progress && progress.stage)) {
-                window.setTimeout(runNextBatch, 40);
+              } else if (
+                !clientStopped &&
+                !isTerminal(progress && progress.stage)
+              ) {
+                window.setTimeout(
+                    runNextBatch,
+                    Math.max(250, toNumber(progress && progress.retryAfterMs)));
               }
             })
             .withFailureHandler(function(error) {
               batchInFlight = false;
               renderClientFailure(error);
             })
-            .processReviewBuildBatch(jobId);
+            .processShopifyCheckBatch(jobId);
       }
 
       function pollProgress() {
@@ -505,13 +549,13 @@
             .withFailureHandler(function(error) {
               pollInFlight = false;
 
-              // A batch response remains authoritative; only stop when no
-              // batch is available to return a better server-side status.
+              // A batch response remains authoritative. Only stop if no batch
+              // is still able to return the current server-side state.
               if (!batchInFlight) {
                 renderClientFailure(error);
               }
             })
-            .getReviewBuildProgress(jobId);
+            .getShopifyCheckProgress(jobId);
       }
 
       function requestCancel() {
@@ -522,8 +566,8 @@
         cancelRequested = true;
         elements.cancelButton.disabled = true;
         elements.message.textContent = batchInFlight
-          ? 'Cancellation requested; finishing the current batch first.'
-          : 'Cancelling review build…';
+          ? 'Cancellation requested; finishing the current check batch first.'
+          : 'Cancelling Shopify checks…';
 
         if (!batchInFlight) {
           sendCancel();
@@ -543,14 +587,14 @@
               render(progress || {
                 ...(latestProgress || {}),
                 stage: 'CANCELLED',
-                message: 'Review build cancelled.',
+                message: 'Shopify checking was cancelled.',
               });
             })
             .withFailureHandler(function(error) {
               cancelInFlight = false;
               renderClientFailure(error);
             })
-            .cancelReviewBuild(jobId);
+            .cancelShopifyCheck(jobId);
       }
 
       function stopPolling() {

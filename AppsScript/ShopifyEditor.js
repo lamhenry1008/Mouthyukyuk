@@ -238,6 +238,7 @@ function onOpen() {
       .addSeparator()
       .addItem('Setup Metafields', 'setupShopifyMetafields')
       .addItem('List Locations', 'listShopifyLocations')
+      .addItem('List Publications', 'listShopifyPublications')
       .addItem('Supported Sheets', 'showSupportedSheets')
       .addToUi();
 }
@@ -660,6 +661,8 @@ function listDriveImages_(brand, collection, productTitle) {
       downloadUrl: directDriveImageUrl_(file.getId()),
       source: 'DRIVE',
       pendingUpload: false,
+      managedFolder: true,
+      sourceReferenced: false,
     });
   }
 
@@ -669,6 +672,326 @@ function listDriveImages_(brand, collection, productTitle) {
         undefined,
         {numeric: true});
   });
+}
+
+/**
+ * Splits one source-sheet Image URL cell into individual references.
+ * Multiple images may be separated by new lines, commas, semicolons, or pipes.
+ */
+function splitEditorImageReferences_(value) {
+  return String(value == null ? '' : value)
+      .split(/[\r\n;,|]+/)
+      .map((part) => clean_(part))
+      .filter(Boolean);
+}
+
+function editorAliasColumns_(sheet, aliases) {
+  if (!sheet || sheet.getLastColumn() < 1) {
+    return [];
+  }
+
+  const accepted = new Set(
+      (aliases || []).map((alias) => {
+        return clean_(alias).toLowerCase().replace(/\s+/g, '_');
+      }));
+  const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getDisplayValues()[0];
+
+  return headers.reduce((columns, header, index) => {
+    const key = clean_(header).toLowerCase().replace(/\s+/g, '_');
+
+    if (accepted.has(key)) {
+      columns.push(index);
+    }
+
+    return columns;
+  }, []);
+}
+
+/**
+ * Reads visible URLs as well as links hidden behind rich-text/HYPERLINK labels.
+ */
+function readEditorImageCellReferences_(range) {
+  const references = [];
+  let foundEmbeddedLink = false;
+  const add = (value) => {
+    splitEditorImageReferences_(value).forEach((reference) => {
+      if (references.indexOf(reference) === -1) {
+        references.push(reference);
+      }
+    });
+  };
+
+  try {
+    const richText = range.getRichTextValue();
+
+    if (richText) {
+      const linkUrl = richText.getLinkUrl();
+
+      if (linkUrl) {
+        foundEmbeddedLink = true;
+        add(linkUrl);
+      }
+
+      if (typeof richText.getRuns === 'function') {
+        richText.getRuns().forEach((run) => {
+          const runLinkUrl = run.getLinkUrl();
+
+          if (runLinkUrl) {
+            foundEmbeddedLink = true;
+            add(runLinkUrl);
+          }
+        });
+      }
+    }
+  } catch (error) {
+    // A plain-value cell may not expose rich text. Its display value remains.
+  }
+
+  try {
+    const formula = range.getFormula();
+    const hyperlinkMatch = clean_(formula).match(
+        /^=HYPERLINK\(\s*"([^"]+)"/i);
+
+    if (hyperlinkMatch) {
+      foundEmbeddedLink = true;
+      add(hyperlinkMatch[1].replace(/""/g, '"'));
+    }
+  } catch (error) {
+    // Formula access is optional for mocked/test ranges.
+  }
+
+  if (!foundEmbeddedLink) {
+    add(range.getDisplayValue());
+  }
+
+  return references;
+}
+
+/**
+ * Extracts a Google Drive file ID from the URL formats used by the sheets.
+ */
+function extractEditorDriveFileId_(value) {
+  const text = clean_(value);
+
+  if (!text) {
+    return '';
+  }
+
+  // Also accept a bare Drive file ID stored in a legacy sheet cell.
+  if (/^[A-Za-z0-9_-]{20,}$/.test(text)) {
+    return text;
+  }
+
+  if (
+    !/^(?:https?:\/\/)?(?:[\w-]+\.)?(?:drive\.google\.com|drive\.usercontent\.google\.com)\//i.test(text)
+  ) {
+    return '';
+  }
+
+  const pathMatch = text.match(
+      /\/(?:file\/)?d\/([A-Za-z0-9_-]{20,})/i);
+  const queryMatch = text.match(
+      /[?&]id=([A-Za-z0-9_%.-]{20,})/i);
+  const encodedId = pathMatch && pathMatch[1] ||
+    queryMatch && queryMatch[1] ||
+    '';
+
+  if (!encodedId) {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(encodedId);
+  } catch (error) {
+    return encodedId;
+  }
+}
+
+/**
+ * Resolves Drive images explicitly referenced by verified source rows.
+ *
+ * These files do not have to follow the managed Brand/Collection filename
+ * convention because the exact source row is the authority. They are still
+ * validated as accessible, non-trashed image files before being returned.
+ */
+function readSourceDriveImages_(sourceRows) {
+  const spreadsheet = SpreadsheetApp.getActive();
+  const images = [];
+  const errors = [];
+  const seenRows = new Set();
+  const fileRequests = {};
+
+  (Array.isArray(sourceRows) ? sourceRows : []).forEach((sourceRow) => {
+    const sheetName = clean_(sourceRow && sourceRow.sheetName);
+    const rowNumber = Number(sourceRow && sourceRow.row);
+    const rowKey = `${sheetName}:${rowNumber}`;
+
+    if (
+      !sheetName ||
+      !Number.isInteger(rowNumber) ||
+      rowNumber < 2 ||
+      seenRows.has(rowKey)
+    ) {
+      return;
+    }
+
+    seenRows.add(rowKey);
+
+    const sheet = spreadsheet.getSheetByName(sheetName);
+
+    if (!sheet || rowNumber > sheet.getLastRow()) {
+      return;
+    }
+
+    const imageColumns = editorAliasColumns_(
+        sheet,
+        APP.sheetAliases.imageUrls);
+
+    if (imageColumns.length === 0) {
+      return;
+    }
+
+    imageColumns.forEach((imageColumn) => {
+      const range = sheet.getRange(
+          rowNumber,
+          imageColumn + 1);
+
+      readEditorImageCellReferences_(range).forEach((reference) => {
+        const fileId = extractEditorDriveFileId_(reference);
+
+        if (!fileId) {
+          errors.push(
+              `${sheetName} row ${rowNumber}: not a supported Google Drive image URL`);
+          return;
+        }
+
+        if (!fileRequests[fileId]) {
+          fileRequests[fileId] = {
+            id: fileId,
+            sourceRefs: [],
+          };
+        }
+
+        const referenceKey = `${sheetName}:${rowNumber}`;
+
+        if (
+          !fileRequests[fileId].sourceRefs.some((sourceRef) => {
+            return sourceRef.key === referenceKey;
+          })
+        ) {
+          fileRequests[fileId].sourceRefs.push({
+            key: referenceKey,
+            sheetName,
+            row: rowNumber,
+            sku: clean_(sourceRow.sku),
+            reference,
+          });
+        }
+      });
+    });
+  });
+
+  Object.keys(fileRequests).forEach((fileId) => {
+    try {
+      const file = DriveApp.getFileById(fileId);
+
+      if (file.isTrashed()) {
+        errors.push(
+            `${fileRequests[fileId].sourceRefs[0].sheetName} row ` +
+            `${fileRequests[fileId].sourceRefs[0].row}: Drive image is in trash`);
+        return;
+      }
+
+      if (!/^image\//i.test(file.getMimeType())) {
+        errors.push(
+            `${fileRequests[fileId].sourceRefs[0].sheetName} row ` +
+            `${fileRequests[fileId].sourceRefs[0].row}: Drive file is not an image`);
+        return;
+      }
+
+      images.push({
+        id: file.getId(),
+        name: file.getName(),
+        driveUrl: directDriveImageUrl_(file.getId()),
+        downloadUrl: directDriveImageUrl_(file.getId()),
+        source: 'DRIVE',
+        pendingUpload: false,
+        managedFolder: false,
+        sourceReferenced: true,
+        sourceRefs: fileRequests[fileId].sourceRefs,
+      });
+    } catch (error) {
+      errors.push(
+          `${fileRequests[fileId].sourceRefs[0].sheetName} row ` +
+          `${fileRequests[fileId].sourceRefs[0].row}: Drive image cannot be opened`);
+    }
+  });
+
+  return {
+    images: mergeEditorDriveImages_(images),
+    errors: Array.from(new Set(errors)),
+  };
+}
+
+/**
+ * Merges Drive image lists by file ID without losing their safety flags.
+ */
+function mergeEditorDriveImages_() {
+  const byId = {};
+
+  Array.prototype.slice.call(arguments).forEach((list) => {
+    (Array.isArray(list) ? list : []).forEach((image) => {
+      const id = clean_(image && image.id);
+
+      if (!id) {
+        return;
+      }
+
+      const previous = byId[id] || {};
+      const sourceRefsByKey = {};
+
+      [
+        ...(previous.sourceRefs || []),
+        ...(image.sourceRefs || []),
+      ].forEach((sourceRef) => {
+        const key = clean_(sourceRef && sourceRef.key) ||
+          `${clean_(sourceRef && sourceRef.sheetName)}:` +
+          `${Number(sourceRef && sourceRef.row) || ''}`;
+
+        if (key && key !== ':') {
+          sourceRefsByKey[key] = sourceRef;
+        }
+      });
+
+      byId[id] = Object.assign({}, previous, image, {
+        id,
+        source: 'DRIVE',
+        pendingUpload:
+          previous.pendingUpload === true ||
+          image.pendingUpload === true,
+        managedFolder:
+          previous.managedFolder === true ||
+          image.managedFolder === true,
+        sourceReferenced:
+          previous.sourceReferenced === true ||
+          image.sourceReferenced === true,
+        sourceRefs: Object.keys(sourceRefsByKey).map((key) => {
+          return sourceRefsByKey[key];
+        }),
+      });
+    });
+  });
+
+  return Object.keys(byId)
+      .map((id) => byId[id])
+      .sort((a, b) => {
+        return clean_(a.name).localeCompare(
+            clean_(b.name),
+            undefined,
+            {numeric: true});
+      });
 }
 
 function nextProductImageNumber_(images, productTitle) {
@@ -742,6 +1065,8 @@ function uploadEditorImage(payload) {
     downloadUrl: directDriveImageUrl_(file.getId()),
     source: 'DRIVE',
     pendingUpload: true,
+    managedFolder: true,
+    sourceReferenced: false,
   };
 
   const all = listDriveImages_(
@@ -763,9 +1088,206 @@ function uploadEditorImage(payload) {
 
 function removeDriveImage(fileId) {
   const file = DriveApp.getFileById(fileId);
+
+  if (!isFileInsideEditorImageRoot_(file)) {
+    throw new Error(
+        'This image is linked from the sheet but is outside the managed ' +
+        'image folder. Remove its sheet URL instead of trashing the file.');
+  }
+
+  if (isDriveFileReferencedByCatalog_(file.getId())) {
+    throw new Error(
+        'This Drive image is still linked by a product sheet. Remove the ' +
+        'Image URL from that row first, then reopen the editor.');
+  }
+
   const name = file.getName();
   file.setTrashed(true);
   return {removed: name};
+}
+
+function isDriveFileReferencedByCatalog_(fileId) {
+  const id = clean_(fileId);
+
+  if (!id) {
+    return false;
+  }
+
+  const spreadsheet = SpreadsheetApp.getActive();
+
+  return spreadsheet.getSheets().some((sheet) => {
+    if (!isCatalogSourceSheet_(sheet) || sheet.getLastRow() < 2) {
+      return false;
+    }
+
+    const columns = editorAliasColumns_(
+        sheet,
+        APP.sheetAliases.imageUrls);
+
+    return columns.some((column) => {
+      const rowCount = sheet.getLastRow() - 1;
+      const displayValues = sheet
+          .getRange(2, column + 1, rowCount, 1)
+          .getDisplayValues();
+
+      for (let offset = 0; offset < displayValues.length; offset += 1) {
+        const visibleReferences = splitEditorImageReferences_(
+            displayValues[offset][0]);
+
+        if (
+          visibleReferences.some((reference) => {
+            return extractEditorDriveFileId_(reference) === id;
+          })
+        ) {
+          return true;
+        }
+
+        // Direct URLs cover the normal path. Inspect the individual cell only
+        // when non-URL display text might hide a rich-text/HYPERLINK target.
+        if (
+          visibleReferences.length > 0 &&
+          readEditorImageCellReferences_(
+              sheet.getRange(offset + 2, column + 1))
+              .some((reference) => {
+                return extractEditorDriveFileId_(reference) === id;
+              })
+        ) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  });
+}
+
+/**
+ * Confirms that a file is inside one of the managed 嘴郁郁 Image roots.
+ */
+function isFileInsideEditorImageRoot_(file) {
+  const roots = DriveApp.getFoldersByName(APP.imageRootFolder);
+  const rootIds = new Set();
+
+  while (roots.hasNext()) {
+    rootIds.add(roots.next().getId());
+  }
+
+  if (rootIds.size === 0) {
+    return false;
+  }
+
+  const folders = [];
+  const initialParents = file.getParents();
+
+  while (initialParents.hasNext()) {
+    folders.push(initialParents.next());
+  }
+
+  const visited = new Set();
+
+  while (folders.length > 0) {
+    const folder = folders.shift();
+    const folderId = folder.getId();
+
+    if (rootIds.has(folderId)) {
+      return true;
+    }
+
+    if (visited.has(folderId)) {
+      continue;
+    }
+
+    visited.add(folderId);
+
+    const parents = folder.getParents();
+
+    while (parents.hasNext()) {
+      folders.push(parents.next());
+    }
+  }
+
+  return false;
+}
+
+function editorMediaStateKey_(productId) {
+  const id = clean_(productId);
+  const numericMatch = id.match(/\/Product\/(\d+)$/);
+  const suffix = numericMatch
+    ? numericMatch[1]
+    : Utilities.base64EncodeWebSafe(id).replace(/=+$/, '');
+
+  return suffix
+    ? `EDITOR_MEDIA_STATE_${suffix}`
+    : '';
+}
+
+function loadEditorMediaState_(productId) {
+  const key = editorMediaStateKey_(productId);
+
+  if (!key) {
+    return null;
+  }
+
+  const properties = PropertiesService.getScriptProperties();
+  const serialized = properties.getProperty(key);
+
+  if (!serialized) {
+    return null;
+  }
+
+  try {
+    const state = JSON.parse(serialized);
+    const updatedAt = Number(state.updatedAt || 0);
+
+    if (
+      !updatedAt ||
+      updatedAt < Date.now() - (30 * 24 * 60 * 60 * 1000)
+    ) {
+      properties.deleteProperty(key);
+      return null;
+    }
+
+    return state;
+  } catch (error) {
+    properties.deleteProperty(key);
+    return null;
+  }
+}
+
+function saveEditorMediaState_(model) {
+  const key = editorMediaStateKey_(model && model.id);
+
+  if (!key) {
+    return;
+  }
+
+  const properties = PropertiesService.getScriptProperties();
+  const removedShopifyMediaIds = normalizeShopifyMediaIds_(
+      model.removedShopifyMediaIds);
+  const pendingReplacementMedia = Array.isArray(
+      model.pendingReplacementMedia)
+    ? model.pendingReplacementMedia
+    : [];
+  const failedDriveImageIds = Array.from(new Set(
+      (model.failedDriveImageIds || []).map((id) => clean_(id)).filter(Boolean)));
+
+  if (
+    removedShopifyMediaIds.length === 0 &&
+    pendingReplacementMedia.length === 0 &&
+    failedDriveImageIds.length === 0
+  ) {
+    properties.deleteProperty(key);
+    return;
+  }
+
+  properties.setProperty(
+      key,
+      JSON.stringify({
+        removedShopifyMediaIds,
+        pendingReplacementMedia,
+        failedDriveImageIds,
+        updatedAt: Date.now(),
+      }));
 }
 
 function getDefaultEditorTargetSheet_(spreadsheet) {
@@ -828,6 +1350,8 @@ function blankEditorModel() {
     images: [],
     driveImages: [],
     removedShopifyMediaIds: [],
+    pendingReplacementMedia: [],
+    failedDriveImageIds: [],
     sourceRows: [],
 
     sourceSpreadsheetId: spreadsheet.getId(),
@@ -1020,6 +1544,14 @@ function saveCatalogProduct(model) {
 
   model.removedShopifyMediaIds =
     normalizeShopifyMediaIds_(model.removedShopifyMediaIds);
+  const incomingPendingReplacementMedia = Array.isArray(
+      model.pendingReplacementMedia)
+    ? model.pendingReplacementMedia
+    : [];
+  const incomingFailedDriveImageIds = Array.isArray(
+      model.failedDriveImageIds)
+    ? model.failedDriveImageIds
+    : [];
 
   const removedShopifyMediaIdSet = new Set(
       model.removedShopifyMediaIds);
@@ -1062,7 +1594,7 @@ function saveCatalogProduct(model) {
   const incomingDriveImages =
     model.driveImages || [];
 
-  const pendingDriveIds = new Set(
+  const requestedPendingDriveIds = new Set(
       incomingDriveImages
           .filter((image) => {
             return image.pendingUpload === true;
@@ -1072,21 +1604,72 @@ function saveCatalogProduct(model) {
           })
           .filter(Boolean));
 
-  // Re-query Drive on the server and accept only exact product images.
+  // Re-resolve the source rows and Drive files on the server. Browser-supplied
+  // file IDs are accepted only when they are an exact managed-folder match or
+  // explicitly referenced by one of these verified product rows.
+  const verifiedSourceRows = findSourceRows_(model);
+  model.sourceRows = verifiedSourceRows;
+  const sourceDriveResult = readSourceDriveImages_(
+      verifiedSourceRows);
   const exactDriveImages = listDriveImages_(
       model.vendor,
       model.collection,
       model.title);
+  const approvedDriveImages = mergeEditorDriveImages_(
+      exactDriveImages,
+      sourceDriveResult.images);
+  const approvedDriveIds = new Set(
+      approvedDriveImages.map((image) => image.id));
+  const pendingReplacementByMediaId = {};
+
+  incomingPendingReplacementMedia.forEach((record) => {
+    const mediaId = normalizeShopifyMediaIds_([
+      record && record.mediaId,
+    ])[0] || '';
+    const driveFileId = clean_(record && record.driveFileId);
+
+    if (mediaId && approvedDriveIds.has(driveFileId)) {
+      pendingReplacementByMediaId[mediaId] = {
+        mediaId,
+        driveFileId,
+      };
+    }
+  });
+
+  const failedDriveImageIds = new Set(
+      incomingFailedDriveImageIds
+          .map((id) => clean_(id))
+          .filter((id) => approvedDriveIds.has(id)));
+  const sourceDriveIds = new Set(
+      sourceDriveResult.images.map((image) => image.id));
+  const incomingApprovedDriveIds = new Set(
+      incomingDriveImages
+          .map((image) => clean_(image && image.id))
+          .filter((id) => approvedDriveIds.has(id)));
+  const browserReceivedSourceImages =
+    Array.from(sourceDriveIds).some((id) => {
+      return incomingApprovedDriveIds.has(id);
+    });
+
+  const shouldAutoSelectSourceImages =
+    !(model.images || []).length &&
+    model.removedShopifyMediaIds.length === 0 &&
+    !browserReceivedSourceImages;
 
   model.driveImages =
-    exactDriveImages.map((image) => {
+    approvedDriveImages.map((image) => {
       image.pendingUpload =
-        pendingDriveIds.has(image.id);
+        requestedPendingDriveIds.has(image.id) ||
+        (
+          shouldAutoSelectSourceImages &&
+          image.sourceReferenced === true
+        );
 
       return image;
     });
+  model.sourceImageErrors = sourceDriveResult.errors;
 
-  const pendingExactImages =
+  const pendingDriveImages =
     model.driveImages.filter((image) => {
       return image.pendingUpload === true;
     });
@@ -1096,19 +1679,23 @@ function saveCatalogProduct(model) {
 
   if (
     !model.id &&
-    pendingExactImages.length === 0
+    pendingDriveImages.length === 0
   ) {
     errors.images =
-      'Upload at least one image for the new product';
+      sourceDriveResult.errors.length > 0
+        ? `The sheet Image URL could not be used: ${sourceDriveResult.errors[0]}`
+        : 'Select a Drive image or upload at least one image for the new product';
   }
 
   if (
     model.id &&
     !(model.images || []).length &&
-    pendingExactImages.length === 0
+    pendingDriveImages.length === 0
   ) {
     errors.images =
-      'Keep at least one Shopify image or upload a replacement';
+      sourceDriveResult.errors.length > 0
+        ? `The sheet Image URL could not be used: ${sourceDriveResult.errors[0]}`
+        : 'Keep a Shopify image or select a Drive replacement';
   }
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -1385,31 +1972,153 @@ function saveCatalogProduct(model) {
         `METAFIELDS_FAILED: ${error.message}`);
   }
 
-  let imageAttachmentSucceeded = true;
+  let imageAttachmentResult = {
+    createdMedia: [],
+    failures: [],
+    failedDriveFileIds: [],
+    processing: [],
+    allReady: true,
+  };
+
+  // A selected retry replaces the prior failure state for that Drive file.
+  pendingDriveImages.forEach((image) => {
+    failedDriveImageIds.delete(image.id);
+  });
 
   try {
-    attachImagesToProduct_(
+    imageAttachmentResult = attachImagesToProduct_(
         productId,
-        pendingExactImages.map((image) => {
+        pendingDriveImages.map((image) => {
           return image.id;
         }),
         model.title);
+
+    imageAttachmentResult.failedDriveFileIds.forEach((driveFileId) => {
+      failedDriveImageIds.add(driveFileId);
+    });
+
+    imageAttachmentResult.createdMedia.forEach((item) => {
+      if (item.status === 'FAILED') {
+        delete pendingReplacementByMediaId[item.mediaId];
+        return;
+      }
+
+      pendingReplacementByMediaId[item.mediaId] = {
+        mediaId: item.mediaId,
+        driveFileId: item.driveFileId,
+      };
+    });
+
+    if (imageAttachmentResult.failures.length > 0) {
+      warnings.push(
+          `IMAGE_UPLOAD_FAILED: ${imageAttachmentResult.failures.join(' | ')}`);
+    }
+
+    if (imageAttachmentResult.processing.length > 0) {
+      warnings.push(
+          'IMAGE_UPLOAD_PROCESSING: ' +
+          imageAttachmentResult.processing
+              .map((item) => item.fileName)
+              .join(', '));
+    }
+
+    // If the final product refresh fails, these confirmed/processing media
+    // placeholders prevent the same source files from being auto-selected and
+    // duplicated on the next Save.
+    imageAttachmentResult.createdMedia
+        .filter((item) => item.status !== 'FAILED')
+        .forEach((item) => {
+          if (
+            (model.images || []).some((image) => {
+              return clean_(image && image.id) === item.mediaId;
+            })
+          ) {
+            return;
+          }
+
+          const sourceImage = pendingDriveImages.find((image) => {
+            return image.id === item.driveFileId;
+          }) || {};
+
+          model.images.push({
+            id: item.mediaId,
+            url: clean_(sourceImage.downloadUrl || sourceImage.driveUrl),
+            alt: model.title,
+            name: item.fileName,
+            source: 'SHOPIFY',
+            status: item.status,
+          });
+        });
   } catch (error) {
-    imageAttachmentSucceeded = false;
+    pendingDriveImages.forEach((image) => {
+      failedDriveImageIds.add(image.id);
+    });
 
     warnings.push(
         `IMAGE_UPLOAD_FAILED: ${error.message}`);
   }
 
-  if (model.removedShopifyMediaIds.length > 0) {
-    if (
-      pendingExactImages.length > 0 &&
-      !imageAttachmentSucceeded
-    ) {
-      // Preserve the old images when their intended replacements could not be
-      // attached. The user can safely retry the same save later.
+  let replacementRecords = Object.keys(pendingReplacementByMediaId)
+      .map((mediaId) => pendingReplacementByMediaId[mediaId]);
+  let replacementsReady = false;
+
+  if (replacementRecords.length > 0) {
+    try {
+      const statuses = getShopifyProductMediaStatuses_(
+          productId,
+          replacementRecords.map((record) => record.mediaId));
+
+      replacementRecords.forEach((record) => {
+        const status = statuses[record.mediaId] || '';
+
+        if (!status || status === 'FAILED') {
+          failedDriveImageIds.add(record.driveFileId);
+          delete pendingReplacementByMediaId[record.mediaId];
+          warnings.push(
+              `IMAGE_UPLOAD_FAILED: ${record.driveFileId}: ` +
+              (
+                status === 'FAILED'
+                  ? 'Shopify media processing failed'
+                  : 'replacement media is no longer attached to this product'
+              ));
+        }
+      });
+
+      replacementRecords = Object.keys(pendingReplacementByMediaId)
+          .map((mediaId) => pendingReplacementByMediaId[mediaId]);
+      replacementsReady =
+        replacementRecords.length > 0 &&
+        replacementRecords.every((record) => {
+          return statuses[record.mediaId] === 'READY';
+        });
+    } catch (error) {
+      replacementsReady = false;
       warnings.push(
-          'IMAGE_DELETE_SKIPPED: replacement image upload failed');
+          `IMAGE_STATUS_CHECK_FAILED: ${error.message || error}`);
+    }
+  }
+
+  model.pendingReplacementMedia = replacementRecords;
+  model.failedDriveImageIds = Array.from(failedDriveImageIds);
+
+  if (model.removedShopifyMediaIds.length > 0) {
+    const replacementWasRequested =
+      pendingDriveImages.length > 0 ||
+      incomingPendingReplacementMedia.length > 0 ||
+      replacementRecords.length > 0 ||
+      failedDriveImageIds.size > 0;
+    const canDeleteOldMedia =
+      !replacementWasRequested ||
+      (
+        replacementsReady &&
+        failedDriveImageIds.size === 0
+      );
+
+    if (!canDeleteOldMedia) {
+      // Preserve both the old-media IDs and replacement state in the returned
+      // editor model. A later Save rechecks Shopify before deleting anything.
+      warnings.push(
+          'IMAGE_DELETE_DEFERRED: replacement images are not all READY');
     } else {
       try {
         deleteShopifyProductMedia_(
@@ -1417,32 +2126,87 @@ function saveCatalogProduct(model) {
             model.removedShopifyMediaIds);
 
         model.removedShopifyMediaIds = [];
+        model.pendingReplacementMedia = [];
+        model.failedDriveImageIds = [];
       } catch (error) {
         warnings.push(
             `IMAGE_DELETE_FAILED: ${error.message}`);
       }
     }
+  } else {
+    // Replacement tracking is only needed while an old-media deletion is
+    // waiting. Failed Drive IDs remain so their checkboxes can be retried.
+    model.pendingReplacementMedia = [];
   }
 
-  // Refresh exact images only. Never load the complete collection.
-  model.driveImages = listDriveImages_(
-      model.vendor,
-      model.collection,
-      model.title);
+  saveEditorMediaState_(model);
 
-  const overallResult =
+  // Preserve both exact managed images and verified sheet-linked images for
+  // source writeback. Never load the complete collection folder.
+  model.driveImages = mergeEditorDriveImages_(
+      listDriveImages_(
+          model.vendor,
+          model.collection,
+          model.title),
+      sourceDriveResult.images);
+
+  const checkpointBaseResult =
     warnings.length
       ? `SAVED_WITH_WARNINGS: ${warnings.join(' | ')}`
       : 'SAVED_FROM_EDITOR';
+  const checkpointResult =
+    `${checkpointBaseResult}; PUBLICATION_PENDING`;
 
   /*
-   * Sheet write happens even if inventory or image attachment produced a
-   * warning, because Shopify may already contain the product.
+   * Persist every Product/Variant GID before publishing. If publication fails
+   * or the browser loses the response, the next Save updates this exact
+   * Shopify product instead of creating a duplicate.
    */
-  const written =
+  let written =
     writeProductToSource_(
         model,
-        overallResult);
+        checkpointResult);
+
+  SpreadsheetApp.flush();
+
+  let publicationResultText = 'PUBLICATION_NOT_VERIFIED';
+
+  try {
+    const publicationResult =
+      mykEnsureActiveShopifyPublications_({
+        status: model.status,
+        productId,
+        variantIds: model.variants.map((variant) => variant.id),
+        callGraphql: (query, variables) => {
+          return shopifyGraphql_(query, variables);
+        },
+      });
+
+    publicationResultText =
+      mykPublicationClean_(publicationResult.message) ||
+      `PUBLICATION_SKIPPED_STATUS=${model.status}`;
+  } catch (error) {
+    const rawPublicationError = clean_(error.message || error);
+    const publicationError =
+      /^PUBLICATION_(?:FAILED|SETUP_REQUIRED):/i.test(rawPublicationError)
+        ? rawPublicationError
+        : `PUBLICATION_FAILED: ${rawPublicationError}`;
+
+    warnings.push(publicationError);
+    publicationResultText = 'PUBLICATION_NOT_VERIFIED';
+  }
+
+  const overallResult =
+    (
+      warnings.length
+        ? `SAVED_WITH_WARNINGS: ${warnings.join(' | ')}`
+        : 'SAVED_FROM_EDITOR'
+    ) + `; ${publicationResultText}`;
+
+  // Replace the durable checkpoint with the verified publication outcome.
+  written = writeProductToSource_(
+      model,
+      overallResult);
 
   SpreadsheetApp.flush();
   model.isNew = false;
@@ -1459,6 +2223,24 @@ function saveCatalogProduct(model) {
     warnings.push(
         `REFRESH_FAILED: ${error.message}`);
   }
+
+  refreshedProduct.removedShopifyMediaIds =
+    model.removedShopifyMediaIds.slice();
+  refreshedProduct.pendingReplacementMedia =
+    (model.pendingReplacementMedia || []).map((record) => {
+      return Object.assign({}, record);
+    });
+  refreshedProduct.failedDriveImageIds =
+    (model.failedDriveImageIds || []).slice();
+
+  const retryDriveImageIds = new Set(
+      refreshedProduct.failedDriveImageIds);
+
+  (refreshedProduct.driveImages || []).forEach((image) => {
+    if (retryDriveImageIds.has(image.id)) {
+      image.pendingUpload = true;
+    }
+  });
 
   return {
     ok: true,
@@ -1500,31 +2282,259 @@ function aliasColumn_(index, aliases) {
 
 function findSourceRows_(product) {
   const ss = SpreadsheetApp.getActive();
-  const skus = new Set((product.variants || []).map(v => clean_(v.sku).toUpperCase()).filter(Boolean));
-  const found = [];
-  ss.getSheets().forEach(sheet => {
-    if (!isCatalogSourceSheet_(sheet)) return;
+  const variants = (product.variants || []).map((variant) => ({
+    id: clean_(variant && variant.id),
+    sku: clean_(variant && variant.sku).toUpperCase(),
+  }));
+  const skus = new Set(
+      variants.map((variant) => variant.sku).filter(Boolean));
+  const productHandle = slugify_(product.handle);
+  const productId = clean_(product.id);
+  const productTitle = normalize_(product.title);
+  const productVendor = normalize_(product.vendor);
+  const variantIds = new Set(
+      variants
+          .map((variant) => variant.id)
+          .filter(Boolean));
+  const preferredSheetName = clean_(product.targetSheetName);
+  const preferredSheet = preferredSheetName
+    ? ss.getSheetByName(preferredSheetName)
+    : null;
+  const hasPreferredCatalogSheet =
+    Boolean(preferredSheet) &&
+    isCatalogSourceSheet_(preferredSheet);
+  const sheets = hasPreferredCatalogSheet
+    ? [preferredSheet]
+    : ss.getSheets().filter(isCatalogSourceSheet_);
+  const groups = [];
+
+  sheets.forEach((sheet) => {
     const values = sheet.getDataRange().getDisplayValues();
-    if (values.length < 2) return;
+
+    if (values.length < 2) {
+      return;
+    }
+
     const index = getSheetIndex_(sheet);
     const skuCol = aliasColumn_(index, APP.sheetAliases.sku);
     const handleCol = aliasColumn_(index, APP.sheetAliases.handle);
+    const titleCol = aliasColumn_(index, APP.sheetAliases.title);
+    const vendorCol = aliasColumn_(index, APP.sheetAliases.vendor);
+    const productGidCol = aliasColumn_(
+        index,
+        APP.sheetAliases.productGid);
+    const variantGidCol = aliasColumn_(
+        index,
+        APP.sheetAliases.variantGid);
+    const candidates = [];
+
     for (let i = 1; i < values.length; i++) {
-      const skuMatch = skuCol >= 0 && skus.has(clean_(values[i][skuCol]).toUpperCase());
-      const handleMatch = handleCol >= 0 && slugify_(values[i][handleCol]) === slugify_(product.handle);
-      if (skuMatch || handleMatch) {
-        found.push({
+      const row = values[i];
+      const rowSku = skuCol >= 0
+        ? clean_(row[skuCol]).toUpperCase()
+        : '';
+      const rowHandle = handleCol >= 0
+        ? slugify_(row[handleCol])
+        : '';
+      const rowProductGid = productGidCol >= 0
+        ? clean_(row[productGidCol])
+        : '';
+      const rowVariantGid = variantGidCol >= 0
+        ? clean_(row[variantGidCol])
+        : '';
+      const rowTitle = titleCol >= 0
+        ? normalize_(row[titleCol])
+        : '';
+      const rowVendor = vendorCol >= 0
+        ? normalize_(row[vendorCol])
+        : '';
+      const productGidMatch =
+        Boolean(productId) &&
+        rowProductGid === productId;
+      const variantGidMatch =
+        Boolean(rowVariantGid) &&
+        variantIds.has(rowVariantGid);
+      const productGidRowIsCurrent =
+        productGidMatch &&
+        (
+          !rowSku ||
+          skus.has(rowSku)
+        );
+      const strongGidMatch =
+        variantGidMatch || productGidRowIsCurrent;
+
+      // A nonblank conflicting Shopify identity must veto a weak SKU or
+      // handle match. This prevents another product row from authorizing its
+      // Drive image when catalog data contains duplicate SKUs.
+      if (
+        !strongGidMatch &&
+        (
+          (
+            Boolean(productId) &&
+            Boolean(rowProductGid) &&
+            rowProductGid !== productId
+          ) ||
+          (
+            variantIds.size > 0 &&
+            Boolean(rowVariantGid) &&
+            !variantIds.has(rowVariantGid)
+          ) ||
+          (
+            Boolean(productHandle) &&
+            Boolean(rowHandle) &&
+            rowHandle !== productHandle
+          ) ||
+          (
+            Boolean(productTitle) &&
+            Boolean(rowTitle) &&
+            rowTitle !== productTitle
+          ) ||
+          (
+            Boolean(productVendor) &&
+            Boolean(rowVendor) &&
+            rowVendor !== productVendor
+          )
+        )
+      ) {
+        continue;
+      }
+
+      const skuMatch = Boolean(rowSku) && skus.has(rowSku);
+      const handleMatch =
+        Boolean(productHandle) &&
+        rowHandle === productHandle;
+
+      if (
+        strongGidMatch ||
+        handleMatch ||
+        skuMatch
+      ) {
+        candidates.push({
           sheetName: sheet.getName(),
           row: i + 1,
-          sku:
-            skuCol >= 0
-              ? values[i][skuCol]
-              : '',
+          sku: skuCol >= 0 ? row[skuCol] : '',
+          normalizedSku: rowSku,
+          rowVariantGid,
+          strongGidMatch,
+          handleMatch,
+          skuMatch,
         });
       }
     }
+
+    const selectedByRow = {};
+    const strongCandidates = candidates.filter((candidate) => {
+      return candidate.strongGidMatch;
+    });
+
+    strongCandidates.forEach((candidate) => {
+      selectedByRow[candidate.row] = candidate;
+    });
+
+    /*
+     * Resolve unmapped siblings per variant instead of choosing one identity
+     * level for the whole product. This keeps a partially synced product's
+     * blank-GID variant rows, while duplicate weak SKU rows still fail closed.
+     */
+    variants.forEach((variant) => {
+      if (!variant.sku) {
+        return;
+      }
+
+      const isCoveredByStrongRow = strongCandidates.some((candidate) => {
+        return (
+          candidate.normalizedSku === variant.sku ||
+          (
+            Boolean(variant.id) &&
+            candidate.rowVariantGid === variant.id
+          )
+        );
+      });
+
+      if (isCoveredByStrongRow) {
+        return;
+      }
+
+      const skuCandidates = candidates.filter((candidate) => {
+        return (
+          !candidate.strongGidMatch &&
+          candidate.normalizedSku === variant.sku
+        );
+      });
+      const sameHandleCandidates = skuCandidates.filter((candidate) => {
+        return candidate.handleMatch;
+      });
+      const preferredCandidates = sameHandleCandidates.length > 0
+        ? sameHandleCandidates
+        : skuCandidates;
+
+      if (preferredCandidates.length === 1) {
+        selectedByRow[preferredCandidates[0].row] =
+          preferredCandidates[0];
+      }
+    });
+
+    // A single-variant legacy row can still be identified by a unique handle
+    // when the SKU changed and the sheet has not received GIDs yet.
+    if (
+      variants.length === 1 &&
+      Object.keys(selectedByRow).length === 0
+    ) {
+      const handleCandidates = candidates.filter((candidate) => {
+        return candidate.handleMatch;
+      });
+
+      if (handleCandidates.length === 1) {
+        selectedByRow[handleCandidates[0].row] = handleCandidates[0];
+      }
+    }
+
+    const selected = Object.keys(selectedByRow)
+        .map((rowNumber) => selectedByRow[rowNumber]);
+    const level = strongCandidates.length > 0
+      ? 3
+      : selected.some((candidate) => candidate.handleMatch)
+        ? 2
+        : selected.length > 0
+          ? 1
+          : 0;
+
+    const rows = selected.map((candidate) => ({
+      sheetName: candidate.sheetName,
+      row: candidate.row,
+      sku: candidate.sku,
+    }));
+
+    if (rows.length > 0) {
+      groups.push({
+        sheetName: sheet.getName(),
+        rows,
+        level,
+      });
+    }
   });
-  return found;
+
+  if (groups.length === 0) {
+    return [];
+  }
+
+  // An explicitly selected target sheet is already the required boundary.
+  if (hasPreferredCatalogSheet) {
+    return groups[0].rows;
+  }
+
+  groups.sort((a, b) => b.level - a.level);
+
+  // Fail closed when two sheets are equally plausible. The editor must not
+  // combine images from different catalogs merely because an SKU is reused.
+  if (
+    groups.length > 1 &&
+    groups[0].level === groups[1].level
+  ) {
+    return [];
+  }
+
+  return groups[0].rows;
 }
 
 function getAliasedSheetValue_(row, index, field) {
@@ -1724,11 +2734,60 @@ function hydrateEditorProduct_(product) {
   product.collection =
     deriveCollectionName_(product.title);
 
-  // Editing only shows Drive images belonging to this exact product.
-  product.driveImages = listDriveImages_(
+  // Keep exact managed-folder matches and the Drive files explicitly linked
+  // by this product's verified source rows. Never load the whole collection.
+  const exactDriveImages = listDriveImages_(
       product.vendor,
       product.collection,
       product.title);
+  const sourceDriveResult = readSourceDriveImages_(
+      product.sourceRows);
+
+  product.driveImages = mergeEditorDriveImages_(
+      exactDriveImages,
+      sourceDriveResult.images);
+  product.sourceImageErrors = sourceDriveResult.errors;
+
+  // When Shopify has no media, preselect the source-linked Drive images so a
+  // normal Save uploads them without requiring another local file upload.
+  if (!(product.images || []).length) {
+    product.driveImages.forEach((image) => {
+      if (image.sourceReferenced === true) {
+        image.pendingUpload = true;
+      }
+    });
+  }
+
+  const savedMediaState = loadEditorMediaState_(product.id);
+
+  if (savedMediaState) {
+    if (!(product.removedShopifyMediaIds || []).length) {
+      product.removedShopifyMediaIds = normalizeShopifyMediaIds_(
+          savedMediaState.removedShopifyMediaIds);
+    }
+
+    if (!(product.pendingReplacementMedia || []).length) {
+      product.pendingReplacementMedia = Array.isArray(
+          savedMediaState.pendingReplacementMedia)
+        ? savedMediaState.pendingReplacementMedia
+        : [];
+    }
+
+    if (!(product.failedDriveImageIds || []).length) {
+      product.failedDriveImageIds = Array.isArray(
+          savedMediaState.failedDriveImageIds)
+        ? savedMediaState.failedDriveImageIds
+        : [];
+    }
+
+    const retryIds = new Set(product.failedDriveImageIds);
+
+    product.driveImages.forEach((image) => {
+      if (retryIds.has(image.id)) {
+        image.pendingUpload = true;
+      }
+    });
+  }
 
   product.sourceSpreadsheetId =
     spreadsheet.getId();
@@ -1789,8 +2848,11 @@ function writeProductToSource_(
   const variants =
     model.variants || [];
 
-  const sourceRows =
-    model.sourceRows || [];
+  const sourceRows = Array.isArray(model.sourceRows)
+    ? model.sourceRows
+    : [];
+
+  model.sourceRows = sourceRows;
 
   variants.forEach((variant) => {
     /*
@@ -1867,6 +2929,25 @@ function writeProductToSource_(
         variant,
         overallResult || 'SAVED_FROM_EDITOR',
         target.isNew === true);
+
+    if (
+      !sourceRows.some((sourceRow) => {
+        return (
+          clean_(sourceRow.sheetName) === clean_(target.sheetName) &&
+          Number(sourceRow.row) === Number(target.row)
+        );
+      })
+    ) {
+      sourceRows.push({
+        sheetName: target.sheetName,
+        row: Number(target.row),
+        sku: clean_(variant.sku),
+        handle: clean_(model.handle),
+        productGid: clean_(model.id),
+        variantGid: clean_(variant.id),
+        isNew: false,
+      });
+    }
 
     results.push(
         `${target.sheetName}!${target.row}`);
@@ -1956,6 +3037,74 @@ function ensureAliasColumn_(sheet, index, field) {
   return col;
 }
 
+/**
+ * Builds the Image URL value for one exact source row.
+ *
+ * Existing row links—including unsupported or temporarily inaccessible links—
+ * are preserved verbatim. Source images from sibling variant rows are not
+ * copied into this row. Newly uploaded managed product images are added to all
+ * rows because they are product-level Shopify gallery media.
+ */
+function editorImageUrlsForSourceRow_(sheet, rowNumber, model) {
+  const references = [];
+  const seen = new Set();
+  const rowKey = `${sheet.getName()}:${rowNumber}`;
+  const addReference = (reference) => {
+    const text = clean_(reference);
+
+    if (!text) {
+      return;
+    }
+
+    const fileId = extractEditorDriveFileId_(text);
+    const key = fileId
+      ? `drive:${fileId}`
+      : `text:${text}`;
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      references.push(text);
+    }
+  };
+
+  editorAliasColumns_(
+      sheet,
+      APP.sheetAliases.imageUrls)
+      .forEach((column) => {
+        readEditorImageCellReferences_(
+            sheet.getRange(rowNumber, column + 1))
+            .forEach(addReference);
+      });
+
+  (model.driveImages || []).forEach((image) => {
+    const isReferencedByThisRow =
+      (image.sourceRefs || []).some((sourceRef) => {
+        const sourceKey = clean_(sourceRef && sourceRef.key) ||
+          `${clean_(sourceRef && sourceRef.sheetName)}:` +
+          `${Number(sourceRef && sourceRef.row) || ''}`;
+
+        return sourceKey === rowKey;
+      });
+    const isNewManagedProductImage =
+      image.managedFolder === true &&
+      image.sourceReferenced !== true;
+
+    if (
+      !isReferencedByThisRow &&
+      !isNewManagedProductImage
+    ) {
+      return;
+    }
+
+    addReference(
+        clean_(image.id)
+          ? directDriveImageUrl_(image.id)
+          : clean_(image.driveUrl));
+  });
+
+  return references.join('\n');
+}
+
 function writeMappedRow_(
     sheet,
     rowNumber,
@@ -2028,14 +3177,10 @@ function writeMappedRow_(
       variant.inventory == null
         ? ''
         : variant.inventory,
-    imageUrls: (model.driveImages || [])
-        .map((image) => {
-          return clean_(image.id)
-            ? directDriveImageUrl_(image.id)
-            : clean_(image.driveUrl);
-        })
-        .filter(Boolean)
-        .join('\n'),
+    imageUrls: editorImageUrlsForSourceRow_(
+        sheet,
+        rowNumber,
+        model),
     productGid: clean_(model.id),
     variantGid: clean_(variant.id),
     lastUpdated: new Date(),
@@ -2226,7 +3371,7 @@ function searchShopifyCatalog(searchText) {
     products(first: 25, query: $query) {
       nodes { id title handle vendor productType status tags descriptionHtml
         featuredMedia { ... on MediaImage { id image { url altText width height } } }
-        media(first: 50) { nodes { id alt mediaContentType ... on MediaImage { image { url altText width height } } } }
+        media(first: 50) { nodes { id alt mediaContentType status ... on MediaImage { image { url altText width height } } } }
         options { id name values }
         variants(first: 100) { nodes { id title sku price compareAtPrice barcode
           selectedOptions { name value }
@@ -2277,6 +3422,7 @@ function loadShopifyProduct(productId) {
             id
             alt
             mediaContentType
+            status
 
             ... on MediaImage {
               image {
@@ -2462,7 +3608,8 @@ function normalizeShopifyProduct_(product) {
           .filter((media) => {
             return (
               media.mediaContentType ===
-              'IMAGE'
+              'IMAGE' &&
+              normalize_(media.status) !== 'FAILED'
             );
           })
           .map((media) => ({
@@ -2484,10 +3631,13 @@ function normalizeShopifyProduct_(product) {
             height:
               media.image &&
               media.image.height,
+            status: clean_(media.status),
             source: 'SHOPIFY',
           })),
 
     removedShopifyMediaIds: [],
+    pendingReplacementMedia: [],
+    failedDriveImageIds: [],
 
     variants:
       (
@@ -2711,17 +3861,221 @@ function uploadBlobToShopify_(blob) {
   return target.resourceUrl;
 }
 
+function getShopifyMediaStatuses_(mediaIds) {
+  if (!mediaIds.length) {
+    return {};
+  }
+
+  const query = `
+    query EditorMediaStatuses($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on MediaImage {
+          id
+          status
+        }
+      }
+    }
+  `;
+  const nodes = shopifyGraphql_(
+      query,
+      {ids: mediaIds}).nodes || [];
+
+  return nodes.reduce((statuses, node) => {
+    if (node && node.id) {
+      statuses[node.id] = clean_(node.status).toUpperCase();
+    }
+
+    return statuses;
+  }, {});
+}
+
+function getShopifyProductMediaStatuses_(productId, mediaIds) {
+  const requested = new Set(mediaIds || []);
+
+  if (!productId || requested.size === 0) {
+    return {};
+  }
+
+  const query = `
+    query EditorProductMediaStatuses($id: ID!) {
+      product(id: $id) {
+        id
+        media(first: 250) {
+          nodes {
+            id
+            status
+          }
+        }
+      }
+    }
+  `;
+  const product = shopifyGraphql_(
+      query,
+      {id: productId}).product;
+
+  if (!product) {
+    throw new Error('Shopify product not found during media verification.');
+  }
+
+  return (product.media && product.media.nodes || [])
+      .reduce((statuses, node) => {
+        if (node && requested.has(node.id)) {
+          statuses[node.id] = clean_(node.status).toUpperCase();
+        }
+
+        return statuses;
+      }, {});
+}
+
+function waitForShopifyMediaStatuses_(media) {
+  const deadline = Date.now() + 12000;
+  let statuses = {};
+
+  while (Date.now() < deadline) {
+    statuses = getShopifyMediaStatuses_(
+        media.map((item) => item.mediaId));
+
+    const isTerminal = media.every((item) => {
+      const status = statuses[item.mediaId] || item.status;
+      return status === 'READY' || status === 'FAILED';
+    });
+
+    if (isTerminal) {
+      break;
+    }
+
+    Utilities.sleep(1000);
+  }
+
+  return media.map((item) => {
+    return Object.assign({}, item, {
+      status: statuses[item.mediaId] || item.status || 'PROCESSING',
+    });
+  });
+}
+
+/**
+ * Uploads each Drive image independently, then confirms its Shopify status.
+ * Partial successes are returned explicitly so retries do not blindly create
+ * a second copy of media that Shopify already accepted.
+ */
 function attachImagesToProduct_(productId, driveFileIds, altText) {
-  if (!driveFileIds.length) return;
-  const media = driveFileIds.map(id => ({
-    originalSource: uploadBlobToShopify_(DriveApp.getFileById(id).getBlob()),
-    mediaContentType: 'IMAGE', alt: altText,
-  }));
-  const mutation = `mutation AddMedia($id: ID!, $media: [CreateMediaInput!]!) {
-    productCreateMedia(productId: $id, media: $media) { media { id alt status } mediaUserErrors { field message } }
-  }`;
-  const result = shopifyGraphql_(mutation, {id: productId, media}).productCreateMedia;
-  throwUserErrors_(result.mediaUserErrors, 'productCreateMedia');
+  const requestedIds = Array.from(new Set(
+      (driveFileIds || []).map((id) => clean_(id)).filter(Boolean)));
+
+  if (requestedIds.length === 0) {
+    return {
+      createdMedia: [],
+      failures: [],
+      failedDriveFileIds: [],
+      processing: [],
+      allReady: true,
+    };
+  }
+
+  const mutation = `
+    mutation AddEditorMedia(
+      $id: ID!,
+      $media: [CreateMediaInput!]!
+    ) {
+      productCreateMedia(productId: $id, media: $media) {
+        media {
+          id
+          alt
+          status
+        }
+        mediaUserErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+  const createdMedia = [];
+  const failures = [];
+  const failedDriveFileIds = [];
+
+  requestedIds.forEach((driveFileId) => {
+    let fileName = driveFileId;
+
+    try {
+      const file = DriveApp.getFileById(driveFileId);
+      fileName = file.getName();
+      const originalSource = uploadBlobToShopify_(file.getBlob());
+      const result = shopifyGraphql_(
+          mutation,
+          {
+            id: productId,
+            media: [{
+              originalSource,
+              mediaContentType: 'IMAGE',
+              alt: altText,
+            }],
+          }).productCreateMedia;
+
+      throwUserErrors_(
+          result.mediaUserErrors,
+          'productCreateMedia');
+
+      if (!result.media || result.media.length !== 1 || !result.media[0].id) {
+        throw new Error(
+            'Shopify did not return the created media record.');
+      }
+
+      createdMedia.push({
+        driveFileId,
+        fileName,
+        mediaId: result.media[0].id,
+        status: clean_(result.media[0].status).toUpperCase() || 'PROCESSING',
+      });
+    } catch (error) {
+      failedDriveFileIds.push(driveFileId);
+      failures.push(
+          `${fileName}: ${error.message || error}`);
+    }
+  });
+
+  let verifiedMedia = createdMedia;
+
+  if (createdMedia.length > 0) {
+    try {
+      verifiedMedia = waitForShopifyMediaStatuses_(createdMedia);
+    } catch (error) {
+      // Keep the immediate statuses and defer replacement deletion. The media
+      // may still finish processing after this editor request ends.
+      verifiedMedia = createdMedia.map((item) => {
+        return Object.assign({}, item, {
+          status: item.status || 'PROCESSING',
+        });
+      });
+      failures.push(
+          `Media status verification failed: ${error.message || error}`);
+    }
+  }
+
+  verifiedMedia.forEach((item) => {
+    if (item.status === 'FAILED') {
+      failedDriveFileIds.push(item.driveFileId);
+      failures.push(
+          `${item.fileName}: Shopify media processing failed`);
+    }
+  });
+
+  const processing = verifiedMedia.filter((item) => {
+    return item.status !== 'READY' && item.status !== 'FAILED';
+  });
+
+  return {
+    createdMedia: verifiedMedia,
+    failures: Array.from(new Set(failures)),
+    failedDriveFileIds: Array.from(new Set(failedDriveFileIds)),
+    processing,
+    allReady:
+      verifiedMedia.length === requestedIds.length &&
+      failures.length === 0 &&
+      processing.length === 0 &&
+      verifiedMedia.every((item) => item.status === 'READY'),
+  };
 }
 
 /**
@@ -2765,8 +4119,10 @@ function deleteShopifyProductMedia_(productId, mediaIds) {
     return [];
   }
 
-  // Never trust media IDs coming from the browser. Confirm that every file is
-  // currently attached to this exact product before permanently deleting it.
+  // Never trust media IDs coming from the browser. Only files that are still
+  // attached to this exact product may be sent to fileDelete. A requested ID
+  // that is already absent is treated as resolved so an earlier/manual delete
+  // cannot leave the editor's deferred replacement state permanently stuck.
   const productQuery = `
     query VerifyEditorProductMedia($id: ID!) {
       product(id: $id) {
@@ -2797,14 +4153,12 @@ function deleteShopifyProductMedia_(productId, mediaIds) {
           : []
       ).map((media) => clean_(media.id)));
 
-  const unrelatedMediaIds = requestedMediaIds.filter((mediaId) => {
-    return !attachedMediaIds.has(mediaId);
+  const attachedRequestedMediaIds = requestedMediaIds.filter((mediaId) => {
+    return attachedMediaIds.has(mediaId);
   });
 
-  if (unrelatedMediaIds.length > 0) {
-    throw new Error(
-        'One or more selected images are no longer attached to this product. ' +
-        'Reload the editor before trying again.');
+  if (attachedRequestedMediaIds.length === 0) {
+    return requestedMediaIds;
   }
 
   const mutation = `
@@ -2825,7 +4179,7 @@ function deleteShopifyProductMedia_(productId, mediaIds) {
   try {
     result = shopifyGraphql_(
         mutation,
-        {fileIds: requestedMediaIds}).fileDelete;
+        {fileIds: attachedRequestedMediaIds}).fileDelete;
   } catch (error) {
     const message = clean_(error && error.message);
 
@@ -2857,7 +4211,7 @@ function deleteShopifyProductMedia_(productId, mediaIds) {
       deletedMediaIds);
 
   if (
-    requestedMediaIds.some((mediaId) => {
+    attachedRequestedMediaIds.some((mediaId) => {
       return !deletedMediaIdSet.has(mediaId);
     })
   ) {
@@ -2866,7 +4220,10 @@ function deleteShopifyProductMedia_(productId, mediaIds) {
         'the editor before trying again.');
   }
 
-  return deletedMediaIds;
+  // Every requested ID is now resolved: it was either already absent or was
+  // confirmed deleted in this call. Returning the full set lets the caller
+  // clear its durable deferred-deletion state.
+  return requestedMediaIds;
 }
 
 function showCatalogEditor() {

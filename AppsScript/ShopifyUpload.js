@@ -31,12 +31,18 @@
  *   SHOPIFY_CLIENT_SECRET
  *   SHOPIFY_LOCATION_ID
  *
+ * Optional Script Properties:
+ *   SHOPIFY_PUBLICATION_IDS
+ *
  * Recommended app scopes:
  *   read_products
  *   write_products
  *   read_inventory
  *   write_inventory
  *   read_locations
+ *   write_files
+ *   read_publications
+ *   write_publications
  */
 
 const MYK_SHOPIFY = Object.freeze({
@@ -52,6 +58,10 @@ const MYK_SHOPIFY = Object.freeze({
 
   // Set false while testing product fields without changing stock.
   inventoryWriteEnabled: true,
+
+  // Adds reviewed source images only when the Shopify product has no media.
+  // Existing Shopify galleries are never replaced or deleted by bulk sync.
+  imageWriteEnabled: true,
 
   inventoryQuantityName: 'available',
   inventoryChangeReason: 'correction',
@@ -151,6 +161,8 @@ const MYK_TAXONOMY = Object.freeze({
 const MYK_UPLOAD_JOB = Object.freeze({
   maxRuntimeMs: 4 * 60 * 1000,
   resumeDelayMs: 60 * 1000,
+  maxTransientRetries: 5,
+  maximumRetryDelayMs: 5 * 60 * 1000,
 
   spreadsheetIdProperty:
     'MYK_UPLOAD_SPREADSHEET_ID',
@@ -179,6 +191,15 @@ const MYK_UPLOAD_JOB = Object.freeze({
   finishedProperty:
     'MYK_UPLOAD_FINISHED',
 
+  retryRowProperty:
+    'MYK_UPLOAD_RETRY_ROW',
+
+  retryAttemptsProperty:
+    'MYK_UPLOAD_RETRY_ATTEMPTS',
+
+  retryNotBeforeProperty:
+    'MYK_UPLOAD_RETRY_NOT_BEFORE',
+
   triggerFunctionName:
     'resumeApprovedRowsUpload',
 });
@@ -188,6 +209,21 @@ const MYK_REVIEW_BUILD = Object.freeze({
   maxBatchRuntimeMs: 25 * 1000,
   stateKeyPrefix: 'MYK_REVIEW_BUILD_',
   stagingSheetPrefix: '__MYK_REVIEW_',
+});
+
+/**
+ * Client-driven, resumable Shopify identity preflight.
+ *
+ * Each browser call checks only a few rows and commits every completed row
+ * before advancing its saved cursor. Shopify is read-only throughout this job.
+ */
+const MYK_SHOPIFY_CHECK = Object.freeze({
+  batchSize: 3,
+  maxBatchRuntimeMs: 25 * 1000,
+  maxTransientRetries: 4,
+  baseRetryDelayMs: 1500,
+  maxRetryDelayMs: 30 * 1000,
+  stateKeyPrefix: 'MYK_SHOPIFY_CHECK_',
 });
 
 /**
@@ -1090,6 +1126,18 @@ function processReviewBuildBatch(jobId) {
             row,
             sourceIndices,
             profile);
+        const reviewedImageReferences =
+          mykBulkMediaReadReviewedImageReferences_(
+              sourceSheet,
+              sourceRowNumber,
+              sourceIndices,
+              profile.aliases.imageUrl);
+
+        // Store the immutable, link-aware snapshot that the owner reviews.
+        // The later upload worker uses this cell and never substitutes a live
+        // Image URL changed after approval.
+        product.imageUrl = normalizeReviewImageUrls_(
+            reviewedImageReferences.join('\n'));
         const validation = validateNormalizedProduct_(product);
 
         stagingRows.push(buildReviewRow_(
@@ -2503,318 +2551,933 @@ function normalizeTaxonomyCategoryId_(value) {
 }
 
 /**
- * Performs read-only Shopify SKU checks.
+ * Starts a client-driven, resumable, read-only Shopify identity check.
  */
 function preflightReviewRows() {
-  const accessToken = getCachedShopifyAccessToken_();
-  const spreadsheet = SpreadsheetApp.getActive();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
 
-  const reviewSheet = requireSheet_(
-      spreadsheet,
-      MYK_SHOPIFY.reviewSheetName);
+  try {
+    const spreadsheet = SpreadsheetApp.getActive();
+    assertNoRunningApprovedUpload_(spreadsheet.getId());
+    const reviewSheet = requireSheet_(
+        spreadsheet,
+        MYK_SHOPIFY.reviewSheetName);
+    const values = reviewSheet.getDataRange().getDisplayValues();
 
-  const values = reviewSheet.getDataRange().getDisplayValues();
-  const indices = getColumnIndices(reviewSheet);
+    if (values.length < 2) {
+      throw new Error(
+          'The Shopify review has no rows. Build the review first.');
+    }
 
-  const handleIndex = requiredColumn_(
-    indices,
-    'Handle');
+    // Validate credentials and every required review heading while the user is
+    // present. Later batches reuse the cached token and cannot prompt.
+    getCachedShopifyAccessToken_();
+    const columns = shopifyCheckColumnIndices_(reviewSheet);
+    const reviewFingerprint = shopifyCheckReviewFingerprint_(
+        values,
+        columns);
+    const resumableState = findResumableShopifyCheckState_(
+        spreadsheet.getId(),
+        reviewSheet.getSheetId());
 
-  const collectionIndex = requiredColumn_(
-      indices,
-      'Collection');
+    if (
+      resumableState &&
+      Number(resumableState.lastReviewRow) === values.length &&
+      resumableState.reviewFingerprint === reviewFingerprint
+    ) {
+      resumableState.stage = 'CHECKING';
+      resumableState.currentItem = '';
+      resumableState.message =
+        `Resuming at review row ${resumableState.nextRow}…`;
+      resumableState.error = '';
+      saveShopifyCheckState_(resumableState);
+      showShopifyCheckProgress(resumableState.jobId);
+      return shopifyCheckProgressFromState_(resumableState);
+    }
 
-  const statusIndex = requiredColumn_(
-      indices,
-      'Status');
+    cleanupOldShopifyChecks_(spreadsheet.getId());
 
-  const validationIndex = requiredColumn_(
-      indices,
-      'Validation');
+    const jobId = Utilities.getUuid().replace(/-/g, '');
+    const now = new Date().toISOString();
+    const state = {
+      jobId,
+      spreadsheetId: spreadsheet.getId(),
+      reviewSheetId: reviewSheet.getSheetId(),
+      reviewSheetName: reviewSheet.getName(),
+      reviewFingerprint,
+      nextRow: 2,
+      lastReviewRow: values.length,
+      totalRows: values.length - 1,
+      processedRows: 0,
+      readyRows: 0,
+      blockedRows: 0,
+      failedRows: 0,
+      transientAttempts: 0,
+      retryAfterMs: 0,
+      retryNotBeforeMs: 0,
+      stage: 'CHECKING',
+      currentItem: '',
+      message: 'Preparing the first Shopify check batch…',
+      error: '',
+      startedAt: now,
+      updatedAt: now,
+    };
 
-  const actionIndex = requiredColumn_(
-      indices,
-      'Upload Action');
+    saveShopifyCheckState_(state);
+    showShopifyCheckProgress(jobId);
+    return shopifyCheckProgressFromState_(state);
+  } finally {
+    lock.releaseLock();
+  }
+}
 
-  const skuIndex = requiredColumn_(
-      indices,
-      'SKU');
+/** Processes and durably commits one small Shopify-check batch. */
+function processShopifyCheckBatch(jobId) {
+  const lock = LockService.getScriptLock();
 
-  const sourceSheetIndex = requiredColumn_(
-      indices,
-      'Source Sheet');
+  if (!lock.tryLock(5000)) {
+    const waitingState = loadShopifyCheckState_(jobId);
+    const waitingProgress = waitingState
+      ? shopifyCheckProgressFromState_(waitingState)
+      : missingShopifyCheckProgress_(jobId);
 
-  const sourceRowIndex = requiredColumn_(
-      indices,
-      'Source Row');
+    if (waitingState && !isTerminalShopifyCheckStage_(waitingState.stage)) {
+      waitingProgress.message =
+        'Waiting for the current Shopify check batch to finish…';
+    }
 
-  const productGidIndex = requiredColumn_(
-      indices,
-      'Shopify Product GID');
+    return waitingProgress;
+  }
 
-  const variantGidIndex = requiredColumn_(
-      indices,
-      'Shopify Variant GID');
+  let state = null;
 
-  const inventoryItemGidIndex = requiredColumn_(
-      indices,
-      'Shopify Inventory Item GID');
+  try {
+    state = loadShopifyCheckState_(jobId);
 
-  const resultIndex = requiredColumn_(
-      indices,
-      'Shopify Result');
+    if (!state) {
+      return missingShopifyCheckProgress_(jobId);
+    }
 
-  const updates = [];
-  const plannedVariantHandles = {};
-  const variantHandleCollections = {};
-  const variantHandleStatuses = {};
+    if (isTerminalShopifyCheckStage_(state.stage)) {
+      return shopifyCheckProgressFromState_(state);
+    }
+
+    const retryNotBeforeMs = Math.max(
+        0,
+        Number(state.retryNotBeforeMs) || 0);
+
+    if (retryNotBeforeMs > Date.now()) {
+      state.retryAfterMs = retryNotBeforeMs - Date.now();
+      return shopifyCheckProgressFromState_(state);
+    }
+
+    state.retryAfterMs = 0;
+    state.retryNotBeforeMs = 0;
+
+    assertNoRunningApprovedUpload_(state.spreadsheetId);
+
+    const spreadsheet = SpreadsheetApp.openById(state.spreadsheetId);
+    const reviewSheet = findSheetById_(
+        spreadsheet,
+        state.reviewSheetId);
+
+    if (!reviewSheet) {
+      throw new Error(
+          'The Shopify review sheet no longer exists. Start Check Shopify ' +
+          'again.');
+    }
+
+    const values = reviewSheet.getDataRange().getDisplayValues();
+
+    if (values.length !== Number(state.lastReviewRow)) {
+      throw new Error(
+          'The Shopify review row count changed during checking. Start Check ' +
+          'Shopify again so rows cannot be matched incorrectly.');
+    }
+
+    const columns = shopifyCheckColumnIndices_(reviewSheet);
+
+    if (
+      state.reviewFingerprint !==
+      shopifyCheckReviewFingerprint_(values, columns)
+    ) {
+      throw new Error(
+          'The Shopify review contents changed during checking. Start Check ' +
+          'Shopify again so each result stays attached to the correct row.');
+    }
+
+    const sharedContext = shopifyCheckSharedContext_(values, columns);
+    const plannedVariantHandles = shopifyCheckPlannedGroups_(
+        values,
+        columns,
+        Number(state.nextRow) || 2);
+    const accessToken = getCachedShopifyAccessToken_();
+    const startedAt = Date.now();
+    let rowsHandled = 0;
+    let nextRow = Math.max(2, Number(state.nextRow) || 2);
+
+    while (
+      nextRow <= state.lastReviewRow &&
+      rowsHandled < MYK_SHOPIFY_CHECK.batchSize
+    ) {
+      if (
+        rowsHandled > 0 &&
+        Date.now() - startedAt >= MYK_SHOPIFY_CHECK.maxBatchRuntimeMs
+      ) {
+        break;
+      }
+
+      const sheetRow = nextRow;
+      const row = values[sheetRow - 1];
+
+      state.currentItem =
+        clean_(row[columns.englishName]) ||
+        clean_(row[columns.sku]) ||
+        `Review row ${sheetRow}`;
+      state.message =
+        `Checking Shopify for row ${sheetRow} of ${state.lastReviewRow}…`;
+      saveShopifyCheckState_(state);
+
+      const outcome = shopifyCheckOneRow_({
+        accessToken,
+        spreadsheet,
+        row,
+        columns,
+        sharedContext,
+        plannedVariantHandles,
+      });
+
+      if (outcome.retryLater) {
+        const attempt = Math.max(
+            0,
+            Number(state.transientAttempts) || 0) + 1;
+
+        if (attempt <= MYK_SHOPIFY_CHECK.maxTransientRetries) {
+          const retryAfterMs = Math.min(
+              MYK_SHOPIFY_CHECK.maxRetryDelayMs,
+              MYK_SHOPIFY_CHECK.baseRetryDelayMs *
+                Math.pow(2, attempt - 1));
+
+          state.transientAttempts = attempt;
+          state.retryAfterMs = retryAfterMs;
+          state.retryNotBeforeMs = Date.now() + retryAfterMs;
+          state.message =
+            `Shopify is temporarily busy. Retrying this row in ` +
+            `${Math.ceil(retryAfterMs / 1000)} second(s) ` +
+            `(${attempt}/${MYK_SHOPIFY_CHECK.maxTransientRetries})…`;
+          state.error = '';
+          saveShopifyCheckState_(state);
+          return shopifyCheckProgressFromState_(state);
+        }
+
+        outcome.action = 'CHECK_FAILED';
+        outcome.result =
+          `CHECK_FAILED_AFTER_RETRIES: ${outcome.error}`;
+        outcome.retryLater = false;
+
+        writeSourceUploadResult_(
+            spreadsheet,
+            clean_(row[columns.sourceSheet]),
+            Number(row[columns.sourceRow]),
+            outcome.result,
+            false);
+      }
+
+      shopifyCheckCommitRow_(
+          reviewSheet,
+          sheetRow,
+          columns,
+          outcome);
+      SpreadsheetApp.flush();
+
+      // Keep this invocation's snapshot consistent so progress recounting and
+      // later shared-variant rows see the row that was just committed.
+      row[columns.action] = outcome.action;
+      row[columns.productGid] = outcome.productGid;
+      row[columns.variantGid] = outcome.variantGid;
+      row[columns.inventoryItemGid] = outcome.inventoryItemGid;
+      row[columns.result] = outcome.result;
+
+      nextRow = sheetRow + 1;
+      rowsHandled += 1;
+      state.nextRow = nextRow;
+      state.transientAttempts = 0;
+      state.retryAfterMs = 0;
+      state.retryNotBeforeMs = 0;
+      state.processedRows = Math.min(
+          state.totalRows,
+          nextRow - 2);
+      Object.assign(
+          state,
+          shopifyCheckRecount_(values, columns, nextRow));
+      state.currentItem = '';
+      state.message =
+        `Checked ${state.processedRows} of ${state.totalRows} review rows.`;
+      saveShopifyCheckState_(state);
+    }
+
+    if (nextRow > state.lastReviewRow) {
+      state.stage = 'COMPLETE';
+      state.currentItem = '';
+      state.message =
+        `Shopify check complete: ${state.readyRows} ready, ` +
+        `${state.blockedRows} blocked, ${state.failedRows} failed.`;
+      state.error = '';
+      saveShopifyCheckState_(state);
+    }
+
+    return shopifyCheckProgressFromState_(state);
+  } catch (error) {
+    if (!state) {
+      state = {
+        jobId: clean_(jobId),
+        stage: 'FAILED',
+        totalRows: 0,
+        processedRows: 0,
+        readyRows: 0,
+        blockedRows: 0,
+        failedRows: 0,
+        currentItem: '',
+        message: 'Shopify check failed.',
+        error: formatShopifyCheckError_(error),
+      };
+    } else {
+      state.stage = 'FAILED';
+      state.currentItem = '';
+      state.message =
+        'Shopify check stopped. Every previously completed row was kept.';
+      state.error = formatShopifyCheckError_(error);
+      saveShopifyCheckState_(state);
+    }
+
+    return shopifyCheckProgressFromState_(state);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Returns lightweight progress for the Shopify-check window. */
+function getShopifyCheckProgress(jobId) {
+  const state = loadShopifyCheckState_(jobId);
+
+  return state
+    ? shopifyCheckProgressFromState_(state)
+    : missingShopifyCheckProgress_(jobId);
+}
+
+/** Cancels future batches without undoing already committed read-only checks. */
+function cancelShopifyCheck(jobId) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const state = loadShopifyCheckState_(jobId);
+
+    if (!state) {
+      return missingShopifyCheckProgress_(jobId);
+    }
+
+    if (!isTerminalShopifyCheckStage_(state.stage)) {
+      state.stage = 'CANCELLED';
+      state.currentItem = '';
+      state.message =
+        'Shopify check cancelled. Completed row results were kept.';
+      state.error = '';
+      saveShopifyCheckState_(state);
+    }
+
+    return shopifyCheckProgressFromState_(state);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Opens the client that repeatedly requests small server batches. */
+function showShopifyCheckProgress(jobId) {
+  const template = HtmlService.createTemplateFromFile(
+      'ShopifyCheckProgress');
+  template.jobId = jobId;
+
+  const html = template
+      .evaluate()
+      .setWidth(520)
+      .setHeight(410);
+
+  SpreadsheetApp.getUi().showModelessDialog(
+      html,
+      'Check Shopify');
+}
+
+function shopifyCheckOneRow_(context) {
+  const accessToken = context.accessToken;
+  const spreadsheet = context.spreadsheet;
+  const row = context.row;
+  const columns = context.columns;
+  const sharedContext = context.sharedContext;
+  const plannedVariantHandles = context.plannedVariantHandles;
+  let action = clean_(row[columns.action]);
+  let productGid = clean_(row[columns.productGid]);
+  let variantGid = clean_(row[columns.variantGid]);
+  let inventoryItemGid = clean_(row[columns.inventoryItemGid]);
+  let result = clean_(row[columns.result]);
+  const sourceSheetName = clean_(row[columns.sourceSheet]);
+  const sourceRow = Number(row[columns.sourceRow]);
+  const sourceProfile = MYK_SHEET_PROFILES[sourceSheetName] || {};
+  const supportsSharedProductVariants =
+    sourceProfile.supportsSharedProductVariants === true;
+
+  if (
+    normalize_(row[columns.validation]) !==
+    'READY_FOR_SHOPIFY_CHECK'
+  ) {
+    action = 'BLOCKED';
+    result = clean_(row[columns.validation]) ||
+      'BLOCKED: local validation failed';
+
+    writeSourceUploadResult_(
+        spreadsheet,
+        sourceSheetName,
+        sourceRow,
+        result,
+        false);
+
+    return {
+      action,
+      productGid,
+      variantGid,
+      inventoryItemGid,
+      result,
+    };
+  }
+
+  const rowHandleKey = slugifyHandle_(row[columns.handle]);
+
+  if (
+    supportsSharedProductVariants &&
+    sharedContext.collections[rowHandleKey] &&
+    sharedContext.collections[rowHandleKey].size > 1
+  ) {
+    action = 'BLOCKED';
+    result = 'BLOCKED: SAME_HANDLE_HAS_DIFFERENT_COLLECTION_NAMES';
+
+    writeSourceUploadResult_(
+        spreadsheet,
+        sourceSheetName,
+        sourceRow,
+        result,
+        false);
+
+    return {
+      action,
+      productGid,
+      variantGid,
+      inventoryItemGid,
+      result,
+    };
+  }
+
+  if (
+    supportsSharedProductVariants &&
+    sharedContext.statuses[rowHandleKey] &&
+    sharedContext.statuses[rowHandleKey].size > 1
+  ) {
+    action = 'BLOCKED';
+    result = 'BLOCKED: SAME_PRODUCT_VARIANTS_HAVE_DIFFERENT_STATUSES';
+
+    writeSourceUploadResult_(
+        spreadsheet,
+        sourceSheetName,
+        sourceRow,
+        result,
+        false);
+
+    return {
+      action,
+      productGid,
+      variantGid,
+      inventoryItemGid,
+      result,
+    };
+  }
+
+  try {
+    const resolution = resolveShopifyProductIdentity_(
+        accessToken,
+        clean_(row[columns.sku]),
+        clean_(row[columns.handle]),
+        supportsSharedProductVariants);
+
+    action = resolution.action;
+    result = resolution.message;
+
+    if (action === 'CREATE_ACTIVE') {
+      action = createActionForStatus_(row[columns.status]);
+      result = `READY_TO_${action}`;
+    }
+
+    const plannedGroupKey = [
+      rowHandleKey,
+      normalize_(row[columns.collection]),
+    ].join('|');
+
+    if (
+      supportsSharedProductVariants &&
+      isCreateProductAction_(action)
+    ) {
+      if (plannedVariantHandles[plannedGroupKey]) {
+        action = 'CREATE_VARIANT';
+        result = 'READY_TO_CREATE_VARIANT_AFTER_PRODUCT';
+      } else {
+        plannedVariantHandles[plannedGroupKey] = true;
+      }
+    }
+
+    if (resolution.identity) {
+      productGid = resolution.identity.productId;
+      variantGid = resolution.identity.variantId;
+      inventoryItemGid = resolution.identity.inventoryItemId;
+
+      writeSourceShopifyIdentity_(
+          spreadsheet,
+          sourceSheetName,
+          sourceRow,
+          resolution.identity);
+    } else {
+      productGid = '';
+      variantGid = '';
+      inventoryItemGid = '';
+    }
+
+    if (action === 'BLOCKED') {
+      writeSourceUploadResult_(
+          spreadsheet,
+          sourceSheetName,
+          sourceRow,
+          result,
+          false);
+    }
+  } catch (error) {
+    if (isTransientShopifyCheckError_(error)) {
+      return {
+        action,
+        productGid,
+        variantGid,
+        inventoryItemGid,
+        result,
+        retryLater: true,
+        error: formatShopifyCheckError_(error),
+      };
+    }
+
+    action = 'CHECK_FAILED';
+    result = `CHECK_FAILED: ${error.message}`;
+
+    writeSourceUploadResult_(
+        spreadsheet,
+        sourceSheetName,
+        sourceRow,
+        result,
+        false);
+  }
+
+  return {
+    action,
+    productGid,
+    variantGid,
+    inventoryItemGid,
+    result,
+  };
+}
+
+function shopifyCheckSharedContext_(values, columns) {
+  const collections = {};
+  const statuses = {};
 
   values.slice(1).forEach((candidate) => {
-    const candidateSheet = clean_(candidate[sourceSheetIndex]);
+    const candidateSheet = clean_(candidate[columns.sourceSheet]);
     const candidateProfile = MYK_SHEET_PROFILES[candidateSheet] || {};
 
     if (candidateProfile.supportsSharedProductVariants !== true) {
       return;
     }
 
-    const handleKey = slugifyHandle_(candidate[handleIndex]);
+    const handleKey = slugifyHandle_(candidate[columns.handle]);
 
     if (!handleKey) {
       return;
     }
 
-    if (!variantHandleCollections[handleKey]) {
-      variantHandleCollections[handleKey] = new Set();
-      variantHandleStatuses[handleKey] = new Set();
+    if (!collections[handleKey]) {
+      collections[handleKey] = new Set();
+      statuses[handleKey] = new Set();
     }
 
-    variantHandleCollections[handleKey].add(
-        normalize_(candidate[collectionIndex]));
-    variantHandleStatuses[handleKey].add(
-        normalizeShopifyProductStatus_(candidate[statusIndex]));
+    collections[handleKey].add(
+        normalize_(candidate[columns.collection]));
+    statuses[handleKey].add(
+        normalizeShopifyProductStatus_(candidate[columns.status]));
   });
 
-  for (let offset = 1; offset < values.length; offset += 1) {
-    const row = values[offset];
+  return {collections, statuses};
+}
 
-    let action = clean_(row[actionIndex]);
-    let productGid = clean_(row[productGidIndex]);
-    let variantGid = clean_(row[variantGidIndex]);
-    let inventoryItemGid = clean_(row[inventoryItemGidIndex]);
-    let result = clean_(row[resultIndex]);
+/** Reconstructs planned shared products from rows committed before the cursor. */
+function shopifyCheckPlannedGroups_(values, columns, nextRow) {
+  const planned = {};
+  const stopBefore = Math.min(
+      values.length + 1,
+      Math.max(2, Number(nextRow) || 2));
 
-    const sourceSheetName = clean_(row[sourceSheetIndex]);
-    const sourceRow = Number(row[sourceRowIndex]);
-    const sourceProfile =
-      MYK_SHEET_PROFILES[sourceSheetName] || {};
-    const supportsSharedProductVariants =
-      sourceProfile.supportsSharedProductVariants === true;
+  for (let sheetRow = 2; sheetRow < stopBefore; sheetRow += 1) {
+    const row = values[sheetRow - 1];
+    const profile =
+      MYK_SHEET_PROFILES[clean_(row[columns.sourceSheet])] || {};
 
     if (
-      normalize_(row[validationIndex]) !==
-      'READY_FOR_SHOPIFY_CHECK'
+      profile.supportsSharedProductVariants !== true ||
+      !isCreateProductAction_(row[columns.action])
     ) {
-      action = 'BLOCKED';
-      result = clean_(row[validationIndex]) || 'BLOCKED: local validation failed';
-
-      writeSourceUploadResult_(
-          spreadsheet,
-          sourceSheetName,
-          sourceRow,
-          result,
-          false);
-
-      updates.push([
-        action,
-        productGid,
-        variantGid,
-        inventoryItemGid,
-        result,
-      ]);
-
       continue;
     }
 
-    const rowHandleKey = slugifyHandle_(row[handleIndex]);
+    const handleKey = slugifyHandle_(row[columns.handle]);
 
-    if (
-      supportsSharedProductVariants &&
-      variantHandleCollections[rowHandleKey] &&
-      variantHandleCollections[rowHandleKey].size > 1
-    ) {
-      action = 'BLOCKED';
-      result =
-        'BLOCKED: SAME_HANDLE_HAS_DIFFERENT_COLLECTION_NAMES';
-
-      writeSourceUploadResult_(
-          spreadsheet,
-          sourceSheetName,
-          sourceRow,
-          result,
-          false);
-
-      updates.push([
-        action,
-        productGid,
-        variantGid,
-        inventoryItemGid,
-        result,
-      ]);
+    if (!handleKey) {
       continue;
     }
 
-    if (
-      supportsSharedProductVariants &&
-      variantHandleStatuses[rowHandleKey] &&
-      variantHandleStatuses[rowHandleKey].size > 1
-    ) {
-      action = 'BLOCKED';
-      result =
-        'BLOCKED: SAME_PRODUCT_VARIANTS_HAVE_DIFFERENT_STATUSES';
+    planned[[
+      handleKey,
+      normalize_(row[columns.collection]),
+    ].join('|')] = true;
+  }
 
-      writeSourceUploadResult_(
-          spreadsheet,
-          sourceSheetName,
-          sourceRow,
-          result,
-          false);
+  return planned;
+}
 
-      updates.push([
-        action,
-        productGid,
-        variantGid,
-        inventoryItemGid,
-        result,
-      ]);
-      continue;
+/** Writes one row result before its resumable cursor advances. */
+function shopifyCheckCommitRow_(
+    reviewSheet,
+    sheetRow,
+    columns,
+    outcome) {
+  reviewSheet
+      .getRange(
+          sheetRow,
+          columns.productGid + 1,
+          1,
+          4)
+      .setValues([[
+        outcome.productGid,
+        outcome.variantGid,
+        outcome.inventoryItemGid,
+        outcome.result,
+      ]]);
+
+  // Write the action last; it is the visible commit marker for this row.
+  reviewSheet
+      .getRange(sheetRow, columns.action + 1)
+      .setValue(outcome.action);
+}
+
+function shopifyCheckColumnIndices_(reviewSheet) {
+  const indices = getColumnIndices(reviewSheet);
+  const columns = {
+    handle: requiredColumn_(indices, 'Handle'),
+    englishName: requiredColumn_(indices, 'English Name'),
+    collection: requiredColumn_(indices, 'Collection'),
+    status: requiredColumn_(indices, 'Status'),
+    validation: requiredColumn_(indices, 'Validation'),
+    action: requiredColumn_(indices, 'Upload Action'),
+    sku: requiredColumn_(indices, 'SKU'),
+    sourceSheet: requiredColumn_(indices, 'Source Sheet'),
+    sourceRow: requiredColumn_(indices, 'Source Row'),
+    productGid: requiredColumn_(indices, 'Shopify Product GID'),
+    variantGid: requiredColumn_(indices, 'Shopify Variant GID'),
+    inventoryItemGid: requiredColumn_(
+        indices,
+        'Shopify Inventory Item GID'),
+    result: requiredColumn_(indices, 'Shopify Result'),
+  };
+
+  if (
+    columns.variantGid !== columns.productGid + 1 ||
+    columns.inventoryItemGid !== columns.productGid + 2 ||
+    columns.result !== columns.productGid + 3
+  ) {
+    throw new Error(
+        'Shopify Product GID, Shopify Variant GID, Shopify Inventory Item ' +
+        'GID, and Shopify Result must remain adjacent in the review sheet.');
+  }
+
+  return columns;
+}
+
+function shopifyCheckRecount_(values, columns, nextRow) {
+  const counts = {
+    readyRows: 0,
+    blockedRows: 0,
+    failedRows: 0,
+  };
+  const stopBefore = Math.min(
+      values.length + 1,
+      Math.max(2, Number(nextRow) || 2));
+
+  for (let sheetRow = 2; sheetRow < stopBefore; sheetRow += 1) {
+    const action = normalize_(values[sheetRow - 1][columns.action]);
+
+    if (action === 'BLOCKED') {
+      counts.blockedRows += 1;
+    } else if (action === 'CHECK_FAILED') {
+      counts.failedRows += 1;
+    } else {
+      counts.readyRows += 1;
+    }
+  }
+
+  return counts;
+}
+
+function shopifyCheckStateKey_(jobId) {
+  const safeJobId = clean_(jobId).replace(/[^A-Za-z0-9]/g, '');
+
+  if (!safeJobId) {
+    throw new Error('Invalid Shopify-check job ID.');
+  }
+
+  return `${MYK_SHOPIFY_CHECK.stateKeyPrefix}${safeJobId}`;
+}
+
+function saveShopifyCheckState_(state) {
+  state.updatedAt = new Date().toISOString();
+  PropertiesService
+      .getScriptProperties()
+      .setProperty(
+          shopifyCheckStateKey_(state.jobId),
+          JSON.stringify(state));
+}
+
+function loadShopifyCheckState_(jobId) {
+  const value = PropertiesService
+      .getScriptProperties()
+      .getProperty(shopifyCheckStateKey_(jobId));
+
+  return value ? JSON.parse(value) : null;
+}
+
+function shopifyCheckProgressFromState_(state) {
+  const totalRows = Math.max(0, Number(state.totalRows) || 0);
+  const processedRows = Math.max(0, Number(state.processedRows) || 0);
+  const stage = normalize_(state.stage);
+  const retryNotBeforeMs = Math.max(
+      0,
+      Number(state.retryNotBeforeMs) || 0);
+  const retryAfterMs = retryNotBeforeMs > 0
+    ? Math.max(0, retryNotBeforeMs - Date.now())
+    : Math.max(0, Number(state.retryAfterMs) || 0);
+
+  return {
+    jobId: state.jobId,
+    stage: state.stage,
+    totalRows,
+    processedRows,
+    readyRows: Math.max(0, Number(state.readyRows) || 0),
+    blockedRows: Math.max(0, Number(state.blockedRows) || 0),
+    failedRows: Math.max(0, Number(state.failedRows) || 0),
+    currentItem: state.currentItem || '',
+    message: state.message || '',
+    error: state.error || '',
+    retryAfterMs,
+    percentage: stage === 'COMPLETE'
+      ? 100
+      : totalRows > 0
+        ? Math.min(99, Math.round((processedRows / totalRows) * 100))
+        : 0,
+  };
+}
+
+function missingShopifyCheckProgress_(jobId) {
+  return {
+    jobId: clean_(jobId),
+    stage: 'FAILED',
+    totalRows: 0,
+    processedRows: 0,
+    readyRows: 0,
+    blockedRows: 0,
+    failedRows: 0,
+    currentItem: '',
+    message: 'This Shopify-check job is no longer available.',
+    error: 'Run Check Shopify again from the review sheet.',
+    retryAfterMs: 0,
+    percentage: 0,
+  };
+}
+
+function isTerminalShopifyCheckStage_(stage) {
+  return ['COMPLETE', 'FAILED', 'CANCELLED']
+      .indexOf(normalize_(stage)) !== -1;
+}
+
+function formatShopifyCheckError_(error) {
+  return clean_(error && error.message ? error.message : error)
+      .replace(/[\r\n]+/g, ' ')
+      .substring(0, 500) || 'Unknown Shopify-check error';
+}
+
+/** Returns true for Shopify/network failures that should be retried in place. */
+function isTransientShopifyCheckError_(error) {
+  const message = clean_(
+      error && error.message ? error.message : error);
+  const transientFragments = [
+    'THROTTL',
+    'TIMED?\\s*OUT',
+    'TIMEOUT',
+    'TEMPORAR',
+    'SERVICE[_ ]UNAVAILABLE',
+    'INTERNAL[_ ]SERVER[_ ]ERROR',
+    'SOCKET',
+    'CONNECTION RESET',
+    'ADDRESS UNAVAILABLE',
+  ].join('|');
+
+  return (
+    /SHOPIFY HTTP (429|5\d\d)\b/i.test(message) ||
+    /INVALID JSON \((429|5\d\d)\)/i.test(message) ||
+    new RegExp(transientFragments, 'i').test(message)
+  );
+}
+
+/**
+ * Fingerprints the immutable review identity fields used by preflight.
+ * Result/action columns are deliberately excluded because this job updates
+ * them after every completed row.
+ */
+function shopifyCheckReviewFingerprint_(values, columns) {
+  const signature = values.slice(1).map((row) => {
+    return [
+      row[columns.sourceSheet],
+      row[columns.sourceRow],
+      row[columns.sku],
+      row[columns.handle],
+      row[columns.englishName],
+      row[columns.collection],
+      row[columns.status],
+      row[columns.validation],
+    ].map(clean_).join('\u001f');
+  }).join('\u001e');
+
+  const digest = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256,
+      signature,
+      Utilities.Charset.UTF_8);
+
+  return Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, '');
+}
+
+/** Returns the newest unfinished/paused job for this exact review sheet. */
+function findResumableShopifyCheckState_(spreadsheetId, reviewSheetId) {
+  const allProperties = PropertiesService
+      .getScriptProperties()
+      .getProperties();
+  const candidates = [];
+
+  Object.keys(allProperties).forEach((key) => {
+    if (key.indexOf(MYK_SHOPIFY_CHECK.stateKeyPrefix) !== 0) {
+      return;
     }
 
     try {
-      const resolution =
-        resolveShopifyProductIdentity_(
-            accessToken,
-            clean_(row[skuIndex]),
-            clean_(row[handleIndex]),
-            supportsSharedProductVariants);
+      const state = JSON.parse(allProperties[key]);
 
-      action = resolution.action;
-      result = resolution.message;
-
-      if (action === 'CREATE_ACTIVE') {
-        action = createActionForStatus_(row[statusIndex]);
-        result = `READY_TO_${action}`;
-      }
-
-      const normalizedHandle = slugifyHandle_(
-          clean_(row[handleIndex]));
-      const plannedGroupKey = [
-        normalizedHandle,
-        normalize_(row[collectionIndex]),
-      ].join('|');
-
-      // If several new source rows share one glitter-potion handle, only the
-      // first row creates the product. Later rows create variants on it.
       if (
-        supportsSharedProductVariants &&
-        isCreateProductAction_(action)
+        state.spreadsheetId === spreadsheetId &&
+        Number(state.reviewSheetId) === Number(reviewSheetId) &&
+        normalize_(state.stage) !== 'COMPLETE'
       ) {
-        if (plannedVariantHandles[plannedGroupKey]) {
-          action = 'CREATE_VARIANT';
-          result =
-            'READY_TO_CREATE_VARIANT_AFTER_PRODUCT';
-        } else {
-          plannedVariantHandles[plannedGroupKey] = true;
-        }
-      }
-
-      if (resolution.identity) {
-        productGid =
-          resolution.identity.productId;
-
-        variantGid =
-          resolution.identity.variantId;
-
-        inventoryItemGid =
-          resolution.identity.inventoryItemId;
-
-        // The identity is safe to persist only after Shopify resolution has
-        // returned one unambiguous product and variant.
-        writeSourceShopifyIdentity_(
-            spreadsheet,
-            sourceSheetName,
-            sourceRow,
-            resolution.identity);
-      } else {
-        productGid = '';
-        variantGid = '';
-        inventoryItemGid = '';
-      }
-
-      if (action === 'BLOCKED') {
-        writeSourceUploadResult_(
-            spreadsheet,
-            sourceSheetName,
-            sourceRow,
-            result,
-            false);
+        candidates.push(state);
       }
     } catch (error) {
-      action = 'CHECK_FAILED';
-      result = `CHECK_FAILED: ${error.message}`;
+      // Malformed legacy state is removed by cleanup before a new job starts.
+    }
+  });
 
-      writeSourceUploadResult_(
-          spreadsheet,
-          sourceSheetName,
-          sourceRow,
-          result,
-          false);
+  candidates.sort((left, right) => {
+    return String(right.updatedAt || '')
+        .localeCompare(String(left.updatedAt || ''));
+  });
+
+  return candidates[0] || null;
+}
+
+/** Prevents Shopify writes from overlapping the read-only identity pass. */
+function assertNoRunningShopifyCheck_(spreadsheetId) {
+  const allProperties = PropertiesService
+      .getScriptProperties()
+      .getProperties();
+  const hasRunningJob = Object.keys(allProperties).some((key) => {
+    if (key.indexOf(MYK_SHOPIFY_CHECK.stateKeyPrefix) !== 0) {
+      return false;
     }
 
-    updates.push([
-      action,
-      productGid,
-      variantGid,
-      inventoryItemGid,
-      result,
-    ]);
+    try {
+      const state = JSON.parse(allProperties[key]);
+
+      return (
+        state.spreadsheetId === spreadsheetId &&
+        normalize_(state.stage) === 'CHECKING'
+      );
+    } catch (error) {
+      return false;
+    }
+  });
+
+  if (hasRunningJob) {
+    throw new Error(
+        'Check Shopify is still running. Wait for it to finish or cancel it ' +
+        'before approving or uploading rows.');
   }
+}
 
-  if (updates.length > 0) {
-    writeSingleColumn_(
-        reviewSheet,
-        actionIndex,
-        updates.map((row) => row[0]));
+/** Prevents a new identity pass while an approved upload is mutating Shopify. */
+function assertNoRunningApprovedUpload_(spreadsheetId) {
+  const properties = PropertiesService.getScriptProperties();
+  const running = properties.getProperty(
+      MYK_UPLOAD_JOB.runningProperty) === 'true';
+  const uploadSpreadsheetId = clean_(properties.getProperty(
+      MYK_UPLOAD_JOB.spreadsheetIdProperty));
 
-    writeSingleColumn_(
-        reviewSheet,
-        productGidIndex,
-        updates.map((row) => row[1]));
-
-    writeSingleColumn_(
-        reviewSheet,
-        variantGidIndex,
-        updates.map((row) => row[2]));
-
-    writeSingleColumn_(
-        reviewSheet,
-        inventoryItemGidIndex,
-        updates.map((row) => row[3]));
-
-    writeSingleColumn_(
-        reviewSheet,
-        resultIndex,
-        updates.map((row) => row[4]));
+  if (
+    running &&
+    (!uploadSpreadsheetId || uploadSpreadsheetId === spreadsheetId)
+  ) {
+    throw new Error(
+        'An approved Shopify upload is still running. Wait for it to finish ' +
+        'or cancel it before starting another Shopify job.');
   }
+}
 
-  SpreadsheetApp.getUi().alert(
-      'Shopify preflight finished.\n\n' +
-      'CREATE_ACTIVE / CREATE_DRAFT / CREATE_ARCHIVED: ' +
-      'create using the source-sheet status.\n' +
-      'CREATE_VARIANT: add a new variant to a shared product handle.\n' +
-      'UPDATE_EXISTING: one exact matching SKU exists.\n' +
-      'BLOCKED: multiple exact SKU matches or local validation failed.\n' +
-      'CHECK_FAILED: Shopify lookup failed.\n\n' +
-      'Blocked and failed reasons were written back to the original sheet.');
+function cleanupOldShopifyChecks_(spreadsheetId) {
+  const properties = PropertiesService.getScriptProperties();
+  const allProperties = properties.getProperties();
+
+  Object.keys(allProperties).forEach((key) => {
+    if (key.indexOf(MYK_SHOPIFY_CHECK.stateKeyPrefix) !== 0) {
+      return;
+    }
+
+    let oldState = null;
+
+    try {
+      oldState = JSON.parse(allProperties[key]);
+    } catch (error) {
+      // A malformed job cannot be resumed safely.
+    }
+
+    if (!oldState || oldState.spreadsheetId === spreadsheetId) {
+      properties.deleteProperty(key);
+    }
+  });
 }
 
 /**
@@ -3067,6 +3730,7 @@ function showApprovalDialog() {
  */
 function getApprovalCandidates() {
   const spreadsheet = SpreadsheetApp.getActive();
+  assertNoRunningShopifyCheck_(spreadsheet.getId());
 
   const reviewSheet = requireSheet_(
       spreadsheet,
@@ -3185,6 +3849,7 @@ function approveSelectedReviewRows(sheetRows) {
       sheetRows.map((value) => Number(value)));
 
   const spreadsheet = SpreadsheetApp.getActive();
+  assertNoRunningShopifyCheck_(spreadsheet.getId());
 
   const reviewSheet = requireSheet_(
       spreadsheet,
@@ -3251,14 +3916,30 @@ function approveSelectedReviewRows(sheetRows) {
 }
 
 /**
- * Uploads every APPROVED review row.
+ * Returns true for a row that can start or safely resume an upload.
+ *
+ * PROCESSING covers a worker that stopped after changing the row state but
+ * before completing it. IMAGE_PROCESSING is deliberately revisited by the
+ * time trigger until Shopify reports the asynchronously attached media READY.
+ */
+function isUploadWorkState_(value) {
+  return [
+    'APPROVED',
+    'PROCESSING',
+    'IMAGE_PROCESSING',
+  ].indexOf(normalize_(value)) !== -1;
+}
+
+/**
+ * Uploads every approved or resumable review row.
  */
 function uploadApprovedRows() {
   const ui = SpreadsheetApp.getUi();
 
   const confirmation = ui.alert(
       'Start sync?',
-      'Approved rows will upload now and resume automatically if needed.',
+      'Approved rows and missing product images will upload now and resume ' +
+      'automatically if Shopify is still processing media.',
       ui.ButtonSet.YES_NO);
 
   if (confirmation !== ui.Button.YES) {
@@ -3266,6 +3947,7 @@ function uploadApprovedRows() {
   }
 
   const spreadsheet = SpreadsheetApp.getActive();
+  assertNoRunningShopifyCheck_(spreadsheet.getId());
 
   const reviewSheet = requireSheet_(
       spreadsheet,
@@ -3283,52 +3965,69 @@ function uploadApprovedRows() {
   const total = values
       .slice(1)
       .filter((row) => {
-        return (
-          normalize_(row[approvalIndex]) ===
-          'APPROVED'
-        );
+        return isUploadWorkState_(row[approvalIndex]);
       })
       .length;
 
   if (total === 0) {
     ui.alert(
-        'No APPROVED rows were found. Approve rows first.');
+        'No approved or resumable rows were found. Approve rows first.');
     return;
   }
 
   const properties =
     PropertiesService.getScriptProperties();
+  const startLock = LockService.getScriptLock();
+  startLock.waitLock(10000);
 
-  properties.setProperties({
-    [MYK_UPLOAD_JOB.spreadsheetIdProperty]:
-      spreadsheet.getId(),
+  try {
+    // Recheck while holding the same lock used by Check Shopify. This makes
+    // the check-then-start transition atomic across multiple staff members.
+    assertNoRunningShopifyCheck_(spreadsheet.getId());
+    assertNoRunningApprovedUpload_(spreadsheet.getId());
 
-    [MYK_UPLOAD_JOB.nextRowProperty]:
-      '2',
+    properties.setProperties({
+      [MYK_UPLOAD_JOB.spreadsheetIdProperty]:
+        spreadsheet.getId(),
 
-    [MYK_UPLOAD_JOB.runningProperty]:
-      'true',
+      [MYK_UPLOAD_JOB.nextRowProperty]:
+        '2',
 
-    [MYK_UPLOAD_JOB.totalProperty]:
-      String(total),
+      [MYK_UPLOAD_JOB.runningProperty]:
+        'true',
 
-    [MYK_UPLOAD_JOB.processedProperty]:
-      '0',
+      [MYK_UPLOAD_JOB.totalProperty]:
+        String(total),
 
-    [MYK_UPLOAD_JOB.successProperty]:
-      '0',
+      [MYK_UPLOAD_JOB.processedProperty]:
+        '0',
 
-    [MYK_UPLOAD_JOB.failedProperty]:
-      '0',
+      [MYK_UPLOAD_JOB.successProperty]:
+        '0',
 
-    [MYK_UPLOAD_JOB.currentItemProperty]:
-      '',
+      [MYK_UPLOAD_JOB.failedProperty]:
+        '0',
 
-    [MYK_UPLOAD_JOB.finishedProperty]:
-      'false',
-  });
+      [MYK_UPLOAD_JOB.currentItemProperty]:
+        '',
 
-  deleteUploadResumeTriggers_();
+      [MYK_UPLOAD_JOB.finishedProperty]:
+        'false',
+
+      [MYK_UPLOAD_JOB.retryRowProperty]:
+        '',
+
+      [MYK_UPLOAD_JOB.retryAttemptsProperty]:
+        '0',
+
+      [MYK_UPLOAD_JOB.retryNotBeforeProperty]:
+        '0',
+    });
+
+    deleteUploadResumeTriggers_();
+  } finally {
+    startLock.releaseLock();
+  }
 
   showUploadProgressDialog();
 
@@ -3481,7 +4180,7 @@ function buildUploadProgressHtml_() {
 
     <div class="metric">
       <span class="number" id="failed">0</span>
-      <span class="label">Failed</span>
+      <span class="label">Needs attention</span>
     </div>
   </div>
 
@@ -3556,6 +4255,17 @@ function processApprovedUploadBatch_() {
   const lock = LockService.getScriptLock();
 
   if (!lock.tryLock(5000)) {
+    const properties = PropertiesService.getScriptProperties();
+
+    if (
+      properties.getProperty(
+          MYK_UPLOAD_JOB.runningProperty) === 'true'
+    ) {
+      // A time trigger is consumed when it fires. Replace it if another worker
+      // still owns the lock so the running job cannot lose its watchdog.
+      scheduleUploadResume_();
+    }
+
     return;
   }
 
@@ -3572,6 +4282,20 @@ function processApprovedUploadBatch_() {
       deleteUploadResumeTriggers_();
       return;
     }
+
+    const retryNotBefore = Number(
+        properties.getProperty(
+            MYK_UPLOAD_JOB.retryNotBeforeProperty) || 0);
+
+    if (retryNotBefore > Date.now()) {
+      scheduleUploadResume_(retryNotBefore - Date.now());
+      return;
+    }
+
+    // Keep one safety trigger scheduled while this worker is active. Normal
+    // completion removes it; a hard Apps Script timeout leaves it available to
+    // resume the saved cursor, including rows already marked PROCESSING.
+    scheduleUploadResume_();
 
     const spreadsheetId = properties.getProperty(
         MYK_UPLOAD_JOB.spreadsheetIdProperty);
@@ -3634,9 +4358,7 @@ function processApprovedUploadBatch_() {
 
       const row = values[sheetRow - 1];
 
-      if (
-        normalize_(row[approvalIndex]) !== 'APPROVED'
-      ) {
+      if (!isUploadWorkState_(row[approvalIndex])) {
         properties.setProperty(
             MYK_UPLOAD_JOB.nextRowProperty,
             String(sheetRow + 1));
@@ -3650,12 +4372,27 @@ function processApprovedUploadBatch_() {
         `Review row ${sheetRow}`);
 
       try {
-        processOneApprovedReviewRow_(
+        const outcome = processOneApprovedReviewRow_(
           spreadsheet,
           reviewSheet,
           row,
           sheetRow,
           indices);
+
+        if (outcome && outcome.resumePending === true) {
+          // Keep the cursor on this row. Shopify media is asynchronous; the
+          // next trigger verifies it instead of uploading a duplicate copy.
+          properties.setProperty(
+              MYK_UPLOAD_JOB.nextRowProperty,
+              String(sheetRow));
+
+          clearUploadRetryState_(properties);
+
+          scheduleUploadResume_();
+          return;
+        }
+
+        clearUploadRetryState_(properties);
 
         incrementUploadJobCounter_(
             MYK_UPLOAD_JOB.successProperty);
@@ -3663,6 +4400,65 @@ function processApprovedUploadBatch_() {
         incrementUploadJobCounter_(
             MYK_UPLOAD_JOB.processedProperty);
       } catch (error) {
+        if (isTransientApprovedUploadError_(error)) {
+          const previousRetryRow = Number(
+              properties.getProperty(
+                  MYK_UPLOAD_JOB.retryRowProperty) || 0);
+          const previousAttempts = previousRetryRow === sheetRow
+            ? Number(
+                properties.getProperty(
+                    MYK_UPLOAD_JOB.retryAttemptsProperty) || 0)
+            : 0;
+          const retryAttempt = previousAttempts + 1;
+
+          if (retryAttempt <= MYK_UPLOAD_JOB.maxTransientRetries) {
+            const retryDelayMs = Math.min(
+                MYK_UPLOAD_JOB.maximumRetryDelayMs,
+                MYK_UPLOAD_JOB.resumeDelayMs *
+                  Math.pow(2, retryAttempt - 1));
+            const retryResult =
+              `RETRYING_TRANSIENT_SHOPIFY_ERROR ` +
+              `(${retryAttempt}/${MYK_UPLOAD_JOB.maxTransientRetries}; ` +
+              `${Math.ceil(retryDelayMs / 1000)}s): ` +
+              `${clean_(error.message || error)}`;
+
+            properties.setProperties({
+              [MYK_UPLOAD_JOB.nextRowProperty]:
+                String(sheetRow),
+              [MYK_UPLOAD_JOB.retryRowProperty]:
+                String(sheetRow),
+              [MYK_UPLOAD_JOB.retryAttemptsProperty]:
+                String(retryAttempt),
+              [MYK_UPLOAD_JOB.retryNotBeforeProperty]:
+                String(Date.now() + retryDelayMs),
+            });
+
+            writeCell_(
+                reviewSheet,
+                sheetRow,
+                approvalIndex,
+                'PROCESSING');
+
+            writeCell_(
+                reviewSheet,
+                sheetRow,
+                resultIndex,
+                retryResult);
+
+            writeSourceUploadResult_(
+                spreadsheet,
+                clean_(row[sourceSheetIndex]),
+                Number(row[sourceRowIndex]),
+                retryResult,
+                false);
+
+            scheduleUploadResume_(retryDelayMs);
+            return;
+          }
+        }
+
+        clearUploadRetryState_(properties);
+
         const failureResult =
           `FAILED: ${error.message}`;
 
@@ -3810,6 +4606,9 @@ function processOneApprovedReviewRow_(
   const bodyIndex =
     requiredColumn_(indices, 'Body HTML');
 
+  const imageUrlIndex =
+    requiredColumn_(indices, 'Image URL');
+
   const sourceSheetIndex =
     requiredColumn_(indices, 'Source Sheet');
 
@@ -3952,13 +4751,51 @@ function processOneApprovedReviewRow_(
       clean_(row[inventoryItemGidIndex]),
   };
   let effectiveAction = action;
+  const persistIdentity = () => {
+    if (!identity.productId) {
+      return;
+    }
+
+    writeCell_(
+        reviewSheet,
+        sheetRow,
+        productGidIndex,
+        identity.productId);
+
+    if (identity.variantId) {
+      writeCell_(
+          reviewSheet,
+          sheetRow,
+          variantGidIndex,
+          identity.variantId);
+    }
+
+    if (identity.inventoryItemId) {
+      writeCell_(
+          reviewSheet,
+          sheetRow,
+          inventoryItemGidIndex,
+          identity.inventoryItemId);
+    }
+
+    writeSourceShopifyIdentity_(
+        spreadsheet,
+        clean_(row[sourceSheetIndex]),
+        Number(row[sourceRowIndex]),
+        identity);
+
+    writeSourceItemId_(
+        spreadsheet,
+        clean_(row[sourceSheetIndex]),
+        Number(row[sourceRowIndex]),
+        clean_(row[itemIdIndex]));
+  };
 
   // Re-resolve planned creates at execution time. This is important when a
   // previous approved row created the shared product after preflight, or when
   // only a later variant row was approved.
   if (
     isCreateAction &&
-    sourceProfile.supportsSharedProductVariants === true &&
     !identity.variantId
   ) {
     const currentResolution =
@@ -3966,17 +4803,51 @@ function processOneApprovedReviewRow_(
           accessToken,
           clean_(row[skuIndex]),
           clean_(row[handleIndex]),
-          true);
+          sourceProfile.supportsSharedProductVariants === true);
 
     if (currentResolution.action === 'UPDATE_EXISTING') {
       effectiveAction = 'UPDATE_EXISTING';
       identity = Object.assign(
           identity,
           currentResolution.identity || {});
-    } else if (currentResolution.action === 'CREATE_VARIANT') {
+    } else if (
+      currentResolution.action === 'CREATE_VARIANT' &&
+      sourceProfile.supportsSharedProductVariants === true
+    ) {
       effectiveAction = 'CREATE_VARIANT';
       identity.productId =
         currentResolution.identity.productId;
+    } else if (currentResolution.action === 'BLOCKED') {
+      throw new Error(
+          currentResolution.message ||
+          'Shopify identity became ambiguous before create.');
+    }
+  }
+
+  /*
+   * CREATE_VARIANT is re-resolved immediately before mutation, even when the
+   * review already knows the parent Product GID. If an earlier request was
+   * accepted by Shopify but its response was lost, the exact SKU is found and
+   * updated instead of being created a second time.
+   */
+  if (effectiveAction === 'CREATE_VARIANT') {
+    const retryResolution = resolveShopifyProductIdentity_(
+        accessToken,
+        clean_(row[skuIndex]),
+        clean_(row[handleIndex]),
+        true);
+
+    if (retryResolution.action === 'UPDATE_EXISTING') {
+      effectiveAction = 'UPDATE_EXISTING';
+      identity = Object.assign(
+          identity,
+          retryResolution.identity || {});
+    } else if (
+      retryResolution.action === 'CREATE_VARIANT' &&
+      retryResolution.identity
+    ) {
+      identity.productId =
+        retryResolution.identity.productId;
     }
   }
 
@@ -4001,6 +4872,7 @@ function processOneApprovedReviewRow_(
       identity = createShopifyProduct_(
           accessToken,
           productCreateInput);
+      persistIdentity();
       effectiveAction = createActionForStatus_(desiredStatus);
     } else {
       updateShopifyProduct_(
@@ -4021,6 +4893,7 @@ function processOneApprovedReviewRow_(
               clean_(row[skuIndex]),
               fixedPrice_(row[priceIndex]),
               variantOptionValues));
+      persistIdentity();
     }
   } else if (
     isCreateAction &&
@@ -4037,24 +4910,7 @@ function processOneApprovedReviewRow_(
     identity = createShopifyProduct_(
         accessToken,
         productCreateInput);
-
-    writeCell_(
-        reviewSheet,
-        sheetRow,
-        productGidIndex,
-        identity.productId);
-
-    writeCell_(
-        reviewSheet,
-        sheetRow,
-        variantGidIndex,
-        identity.variantId);
-
-    writeCell_(
-        reviewSheet,
-        sheetRow,
-        inventoryItemGidIndex,
-        identity.inventoryItemId);
+    persistIdentity();
   } else if (effectiveAction === 'UPDATE_EXISTING') {
     if (
       !identity.productId ||
@@ -4100,6 +4956,13 @@ function processOneApprovedReviewRow_(
   identity.inventoryItemId =
     variantResult.inventoryItemId ||
     identity.inventoryItemId;
+
+  /*
+   * Persist identity before metafields, inventory, or media. If a later API
+   * call fails or the worker reaches its runtime limit, the resumable retry
+   * updates this exact product/variant instead of creating a duplicate.
+   */
+  persistIdentity();
 
   setShopifyProductMetafields_(
       accessToken,
@@ -4200,8 +5063,136 @@ function processOneApprovedReviewRow_(
       ? `CREATED_VARIANT_${desiredStatus}`
       : `UPDATED_${desiredStatus}`;
 
-  const finalResult =
+  const coreResult =
     `${productResult}; STATUS=${desiredStatus}; ${inventoryResultText}`;
+
+  let imageResult;
+
+  if (MYK_SHOPIFY.imageWriteEnabled) {
+    try {
+      imageResult = mykBulkEnsureMissingProductImages_({
+        accessToken,
+        spreadsheet,
+        reviewSheet,
+        indices,
+        row,
+        productId: identity.productId,
+        altText: clean_(row[englishNameIndex]),
+        reviewImageUrl: clean_(row[imageUrlIndex]),
+        previousResult: clean_(row[resultIndex]),
+        onBeforeAttach: (checkpoint) => {
+          const attachingResult =
+            `PARTIAL: ${coreResult}; ` +
+            `${clean_(checkpoint && checkpoint.message) ||
+              'IMAGE_ATTACHING'}`;
+
+          writeCell_(
+              reviewSheet,
+              sheetRow,
+              approvalIndex,
+              'IMAGE_PROCESSING');
+
+          writeCell_(
+              reviewSheet,
+              sheetRow,
+              resultIndex,
+              attachingResult);
+
+          writeSourceUploadResult_(
+              spreadsheet,
+              clean_(row[sourceSheetIndex]),
+              Number(row[sourceRowIndex]),
+              attachingResult,
+              false);
+        },
+      });
+    } catch (error) {
+      throw new Error(
+          `PARTIAL: ${coreResult}; IMAGE_UPLOAD_FAILED: ` +
+          `${error.message || error}`);
+    }
+  } else {
+    imageResult = {
+      complete: true,
+      pending: false,
+      failed: false,
+      code: 'IMAGE_DISABLED',
+      message: 'IMAGE_DISABLED',
+      mediaIds: [],
+    };
+  }
+
+  if (imageResult && imageResult.failed === true) {
+    throw new Error(
+        `PARTIAL: ${coreResult}; IMAGE_UPLOAD_FAILED: ` +
+        `${imageResult.message || imageResult.code}`);
+  }
+
+  const imageResultText =
+    clean_(imageResult && imageResult.message) ||
+    'IMAGE_SKIPPED_NO_SOURCE_URL';
+  const prePublicationResult = `${coreResult}; ${imageResultText}`;
+
+  if (imageResult && imageResult.pending === true) {
+    const processingResult = `PARTIAL: ${prePublicationResult}`;
+
+    writeCell_(
+        reviewSheet,
+        sheetRow,
+        approvalIndex,
+        'IMAGE_PROCESSING');
+
+    writeCell_(
+        reviewSheet,
+        sheetRow,
+        statusIndex,
+        desiredStatus);
+
+    writeCell_(
+        reviewSheet,
+        sheetRow,
+        resultIndex,
+        processingResult);
+
+    writeSourceUploadResult_(
+        spreadsheet,
+        clean_(row[sourceSheetIndex]),
+        Number(row[sourceRowIndex]),
+        processingResult,
+        false);
+
+    return {resumePending: true};
+  }
+
+  let publicationResult;
+
+  try {
+    publicationResult = mykEnsureActiveShopifyPublications_({
+      status: desiredStatus,
+      productId: identity.productId,
+      variantIds: [identity.variantId],
+      callGraphql: (query, variables) => {
+        return callShopifyGraphql_(
+            accessToken,
+            query,
+            variables);
+      },
+    });
+  } catch (error) {
+    const publicationError = clean_(error.message || error);
+
+    throw new Error(
+        `PARTIAL: ${prePublicationResult}; ` +
+        `${/^PUBLICATION_(?:FAILED|SETUP_REQUIRED):/i.test(publicationError)
+          ? publicationError
+          : `PUBLICATION_FAILED: ${publicationError}`}`);
+  }
+
+  const publicationResultText =
+    clean_(publicationResult && publicationResult.message) ||
+    `PUBLICATION_SKIPPED_STATUS=${desiredStatus}`;
+  const finalResult =
+    `${prePublicationResult}; ${publicationResultText}`;
 
   writeCell_(
       reviewSheet,
@@ -4265,6 +5256,8 @@ function processOneApprovedReviewRow_(
       true,
       taxonomy,
       desiredStatus);
+
+  return {resumePending: false};
 }
 
 /** Creates one Shopify product with the reviewed source status. */
@@ -6487,14 +7480,18 @@ function writeSourceUploadResult_(
   }
 }
 
-function scheduleUploadResume_() {
+function scheduleUploadResume_(delayMs) {
   deleteUploadResumeTriggers_();
+
+  const safeDelayMs = Math.max(
+      1000,
+      Number(delayMs) || MYK_UPLOAD_JOB.resumeDelayMs);
 
   ScriptApp
       .newTrigger(
           MYK_UPLOAD_JOB.triggerFunctionName)
       .timeBased()
-      .after(MYK_UPLOAD_JOB.resumeDelayMs)
+      .after(safeDelayMs)
       .create();
 }
 
@@ -6522,6 +7519,15 @@ function clearUploadJob_() {
   properties.deleteProperty(
       MYK_UPLOAD_JOB.nextRowProperty);
 
+  properties.deleteProperty(
+      MYK_UPLOAD_JOB.retryRowProperty);
+
+  properties.deleteProperty(
+      MYK_UPLOAD_JOB.retryAttemptsProperty);
+
+  properties.deleteProperty(
+      MYK_UPLOAD_JOB.retryNotBeforeProperty);
+
   properties.setProperties({
     [MYK_UPLOAD_JOB.runningProperty]:
       'false',
@@ -6534,6 +7540,30 @@ function clearUploadJob_() {
   });
 
   deleteUploadResumeTriggers_();
+}
+
+function clearUploadRetryState_(properties) {
+  const target = properties ||
+    PropertiesService.getScriptProperties();
+
+  target.setProperties({
+    [MYK_UPLOAD_JOB.retryRowProperty]: '',
+    [MYK_UPLOAD_JOB.retryAttemptsProperty]: '0',
+    [MYK_UPLOAD_JOB.retryNotBeforeProperty]: '0',
+  });
+}
+
+function isTransientApprovedUploadError_(error) {
+  const message = clean_(
+      error && error.message ? error.message : error);
+
+  // Media has its own durable retry markers in Shopify Result. Restrict this
+  // generic backoff to the publication phase so those markers are never
+  // overwritten by a different retry protocol.
+  return (
+    /PUBLICATION_(?:FAILED|SETUP_REQUIRED)/i.test(message) &&
+    isTransientShopifyCheckError_(error)
+  );
 }
 
 function cancelApprovedRowsUpload() {
