@@ -1,3 +1,5 @@
+
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -24,6 +26,10 @@
 
     * {
       box-sizing: border-box;
+    }
+
+    [hidden] {
+      display: none !important;
     }
 
     .sr-only {
@@ -389,6 +395,13 @@
       font-size: 11px;
     }
 
+    .field,
+    .panel,
+    .editor-pane,
+    .modal-body {
+      min-width: 0;
+    }
+
     .required-marker {
       color: var(--red);
     }
@@ -688,6 +701,10 @@
       display: grid;
     }
 
+    body.modal-open {
+      overflow: hidden;
+    }
+
     .busy-card {
       display: flex;
       gap: 9px;
@@ -848,10 +865,173 @@
       font-size: 10px;
     }
 
-    @media (max-width: 700px) {
-      .catalog-table {
-        min-width: 800px;
-      }
+    .panel-actions,
+    .modal-actions,
+    .mto-creator-actions,
+    .mto-variant-actions {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+    }
+
+    .mto-create-modal {
+      width: min(820px, 96vw);
+      height: min(760px, 92vh);
+    }
+
+    .mto-create-modal .modal-header {
+      justify-content: space-between;
+    }
+
+    .mto-create-body {
+      padding: 14px;
+    }
+
+    .mto-create-intro {
+      margin: 0 0 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .mto-create-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mto-image-field {
+      grid-column: 1 / -1;
+    }
+
+    .mto-variants-section {
+      margin-top: 16px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .mto-variants-heading {
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 9px;
+    }
+
+    .mto-variants-heading h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .mto-variant-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .mto-variant-card {
+      display: grid;
+      grid-template-columns: minmax(125px, 1.1fr) minmax(125px, 1.3fr) minmax(90px, 0.7fr) minmax(115px, 1fr) minmax(80px, 0.65fr) auto;
+      gap: 8px;
+      align-items: end;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+
+    .mto-variant-number {
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .mto-variant-card .field label {
+      min-height: 14px;
+    }
+
+    .mto-variant-card .icon-button {
+      min-height: 36px;
+      margin-bottom: 0;
+    }
+
+    .mto-create-footer {
+      position: sticky;
+      z-index: 2;
+      bottom: 0;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: center;
+      margin: 16px -14px -14px;
+      padding: 11px 14px;
+      border-top: 1px solid var(--line);
+      background: var(--white);
+    }
+
+    .mto-create-status {
+      min-width: 0;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .mto-create-status.error-text {
+      color: var(--red);
+    }
+
+    .mto-create-status.success-text {
+      color: var(--green);
+    }
+
+    .mto-created-results {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .mto-created-results[hidden] {
+      display: none;
+    }
+
+    .mto-created-heading {
+      margin: 0;
+      color: var(--green);
+      font-size: 13px;
+    }
+
+    .mto-created-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 10px;
+      border: 1px solid #b8d7bf;
+      border-radius: 7px;
+      background: #f2faf4;
+    }
+
+    .mto-created-title {
+      overflow: hidden;
+      font-weight: 700;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .mto-created-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .mto-create-status,
+    .field-error {
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-action-bar {
+      display: none;
     }
 
     @media (max-width: 900px) {
@@ -862,6 +1042,452 @@
       .brand-title,
       .status-message {
         display: none;
+      }
+    }
+
+    @media (max-width: 700px) {
+      html,
+      body {
+        min-width: 0;
+        height: auto;
+      }
+
+      body {
+        overflow: auto;
+        padding-bottom: calc(124px + env(safe-area-inset-bottom));
+        font-size: 14px;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        min-height: 44px;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 9px 12px;
+      }
+
+      .icon-button {
+        min-height: 44px;
+      }
+
+      .toolbar {
+        position: relative;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 8px;
+        min-height: 0;
+        padding: 8px;
+      }
+
+      .brand-title {
+        display: block;
+        align-self: center;
+        margin: 0;
+      }
+
+      .toolbar-search {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-row: 2;
+        gap: 6px;
+        max-width: none;
+      }
+
+      .toolbar-search input {
+        min-width: 0;
+      }
+
+      .toolbar-spacer,
+      .toolbar > .status-message,
+      .toolbar > #cancel-order-button,
+      .toolbar > #save-order-button {
+        display: none;
+      }
+
+      .receipt-link {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+        max-width: 88px;
+      }
+
+      #new-order-button {
+        grid-column: 1;
+        grid-row: 3;
+      }
+
+      #close-button {
+        grid-column: 3;
+        grid-row: 1;
+      }
+
+      .app-layout {
+        display: block;
+        height: auto;
+      }
+
+      .order-sidebar {
+        max-width: 100%;
+        overflow: hidden;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .sidebar-heading {
+        position: static;
+        padding: 8px 10px 5px;
+      }
+
+      #order-results {
+        display: flex;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scroll-snap-type: x proximity;
+      }
+
+      .order-result {
+        flex: 0 0 235px;
+        min-height: 82px;
+        border-right: 1px solid var(--line);
+        border-bottom: 0;
+        scroll-snap-align: start;
+      }
+
+      .sidebar-empty {
+        flex: 1 0 100%;
+        padding: 14px 12px;
+      }
+
+      .editor-pane {
+        overflow: visible;
+        padding: 10px 8px 20px;
+      }
+
+      .editor-header {
+        gap: 10px;
+        align-items: center;
+      }
+
+      .editor-header h1 {
+        font-size: 18px;
+      }
+
+      .panel {
+        margin-bottom: 10px;
+        border-radius: 9px;
+      }
+
+      .panel-header {
+        flex-wrap: wrap;
+        align-items: flex-start;
+        padding: 10px;
+      }
+
+      .panel-actions {
+        width: 100%;
+      }
+
+      .cart-panel > .panel-header .panel-actions {
+        display: none;
+      }
+
+      .panel-actions button {
+        flex: 1 1 0;
+      }
+
+      .panel-body {
+        padding: 10px;
+      }
+
+      .form-grid,
+      .mto-create-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .span-2,
+      .span-4,
+      .mto-image-field {
+        grid-column: auto;
+      }
+
+      .field label,
+      .field-error {
+        font-size: 12px;
+      }
+
+      .table-wrap {
+        overflow: visible;
+      }
+
+      .cart-table,
+      .cart-table tbody,
+      .cart-table tr,
+      .cart-table td,
+      .catalog-table,
+      .catalog-table tbody,
+      .catalog-table tr,
+      .catalog-table td {
+        display: block;
+        width: 100%;
+      }
+
+      .cart-table thead,
+      .catalog-table thead {
+        display: none;
+      }
+
+      .cart-table tbody,
+      .catalog-table tbody {
+        padding: 8px;
+      }
+
+      .cart-table tr,
+      .catalog-table tr {
+        position: relative;
+        margin-bottom: 10px;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--white);
+        box-shadow: 0 2px 8px rgba(31, 42, 55, 0.06);
+      }
+
+      .cart-table tr.invalid-box {
+        border: 2px solid var(--red);
+        background: #fff5f5;
+      }
+
+      .cart-table td,
+      .catalog-table td {
+        display: grid;
+        grid-template-columns: 94px minmax(0, 1fr);
+        gap: 8px;
+        align-items: center;
+        min-width: 0;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--soft-line);
+        overflow-wrap: anywhere;
+      }
+
+      .cart-table td::before,
+      .catalog-table td::before {
+        content: attr(data-label);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.025em;
+        text-transform: uppercase;
+      }
+
+      .cart-table td:first-child,
+      .catalog-table td:first-child {
+        display: block;
+        padding-top: 0;
+      }
+
+      .cart-table td:first-child::before,
+      .catalog-table td:first-child::before {
+        display: none;
+      }
+
+      .cart-table td:last-child,
+      .catalog-table td:last-child {
+        display: block;
+        padding: 8px 0 0;
+        border-bottom: 0;
+      }
+
+      .cart-table td:last-child::before,
+      .catalog-table td:last-child::before {
+        display: none;
+      }
+
+      .cart-table input,
+      .cart-table select,
+      .catalog-table button {
+        width: 100%;
+        min-width: 0;
+        min-height: 44px;
+      }
+
+      .cart-table .icon-button {
+        width: 100%;
+      }
+
+      .money-cell {
+        text-align: left !important;
+      }
+
+      .totals {
+        grid-template-columns: minmax(0, 1fr) 105px;
+        padding: 12px;
+      }
+
+      .image-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .image-preview {
+        height: 105px;
+      }
+
+      .modal-backdrop {
+        place-items: end center;
+        padding: 0;
+      }
+
+      .catalog-modal,
+      .mto-create-modal {
+        width: 100%;
+        height: min(94dvh, 760px);
+        max-height: 94vh;
+        border-radius: 14px 14px 0 0;
+      }
+
+      .modal-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 10px;
+      }
+
+      .modal-title {
+        min-width: 0;
+        margin: 0;
+      }
+
+      .catalog-search {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-row: 2;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      .modal-actions {
+        grid-column: 1 / -1;
+        flex-wrap: wrap;
+      }
+
+      .modal-actions button {
+        flex: 1 1 auto;
+      }
+
+      .catalog-product-summary {
+        grid-template-columns: 64px minmax(0, 1fr);
+      }
+
+      .catalog-thumbnail {
+        width: 64px;
+        height: 64px;
+      }
+
+      .mto-create-body {
+        padding: 12px;
+      }
+
+      .mto-variant-card {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      }
+
+      .mto-variant-number,
+      .mto-variant-card .mto-id-field,
+      .mto-variant-card .mto-option-field,
+      .mto-variant-actions {
+        grid-column: 1 / -1;
+      }
+
+      .mto-variant-actions .icon-button {
+        width: 100%;
+        min-height: 44px;
+      }
+
+      .mto-create-footer {
+        align-items: stretch;
+        flex-direction: column;
+        margin: 16px -12px -12px;
+        padding-bottom: calc(11px + env(safe-area-inset-bottom));
+      }
+
+      .mto-creator-actions {
+        width: 100%;
+      }
+
+      .mto-creator-actions button {
+        flex: 1 1 0;
+      }
+
+      .mto-created-item {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .mobile-action-bar {
+        position: fixed;
+        z-index: 60;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+        gap: 7px;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+        border-top: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 -5px 18px rgba(31, 42, 55, 0.12);
+        backdrop-filter: blur(8px);
+      }
+
+      .mobile-action-bar button {
+        min-width: 0;
+        min-height: 48px;
+      }
+
+      .mobile-add-actions {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+      }
+
+      .mobile-add-actions:not(.mto-mode) #mobile-add-product-button {
+        grid-column: 1 / -1;
+      }
+
+      .mobile-action-bar:not(.has-cancel) #mobile-save-order-button {
+        grid-column: 1 / -1;
+      }
+
+      #mobile-cancel-order-button[hidden],
+      #mobile-create-mto-button[hidden] {
+        display: none;
+      }
+    }
+
+    @media (max-width: 360px) {
+      .toolbar-search {
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      #load-order-button {
+        grid-column: 1 / -1;
+      }
+
+      .image-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .mto-variant-card {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .mto-variant-card > *,
+      .mto-variant-number,
+      .mto-variant-actions {
+        grid-column: 1;
       }
     }
   </style>
@@ -999,7 +1625,10 @@
               Add exact Shopify variants. Adding the same variant again increases its quantity.
             </div>
           </div>
-          <button id="add-product-button" type="button">Add product</button>
+          <div class="panel-actions">
+            <button id="create-mto-product-button" type="button" hidden>Create MTO product</button>
+            <button id="add-product-button" type="button">Add product</button>
+          </div>
         </div>
         <div class="table-wrap">
           <table class="cart-table">
@@ -1074,7 +1703,10 @@
           >
           <button id="catalog-search-button" class="primary" type="button">Search</button>
         </div>
-        <button id="catalog-close-button" type="button">Close</button>
+        <div class="modal-actions">
+          <button id="catalog-create-mto-button" type="button" hidden>Create new</button>
+          <button id="catalog-close-button" type="button">Close</button>
+        </div>
       </div>
       <div class="modal-body">
         <table class="catalog-table">
@@ -1096,6 +1728,85 @@
       </div>
     </section>
   </div>
+
+  <div id="mto-create-backdrop" class="modal-backdrop" aria-hidden="true">
+    <section
+      class="catalog-modal mto-create-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="mto-create-title"
+    >
+      <div class="modal-header">
+        <div id="mto-create-title" class="modal-title">Create MTO32 product</div>
+        <button id="mto-create-close-button" type="button">Close</button>
+      </div>
+      <div class="modal-body mto-create-body">
+        <p class="mto-create-intro">
+          This creates new rows in MTO 32 Summary only. It does not create a Shopify product or change Shopify inventory.
+        </p>
+
+        <form id="mto-create-form" novalidate>
+          <div class="mto-create-grid">
+            <div id="mto-field-english-name" class="field">
+              <label for="mto-english-name">
+                English name <span class="required-marker">*</span>
+              </label>
+              <input id="mto-english-name" autocomplete="off" required>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="mto-field-chinese-name" class="field">
+              <label for="mto-chinese-name">
+                Chinese name <span class="required-marker">*</span>
+              </label>
+              <input id="mto-chinese-name" autocomplete="off" required>
+              <div class="field-error"></div>
+            </div>
+
+            <div id="mto-field-image-urls" class="field mto-image-field">
+              <label for="mto-image-urls">Image URL(s) — optional</label>
+              <textarea
+                id="mto-image-urls"
+                inputmode="url"
+                placeholder="Paste one HTTPS image URL per line"
+              ></textarea>
+              <div class="field-error"></div>
+            </div>
+          </div>
+
+          <section class="mto-variants-section" aria-labelledby="mto-variants-title">
+            <div class="mto-variants-heading">
+              <h3 id="mto-variants-title">Variants</h3>
+              <button id="mto-add-variant-button" type="button">Add variant</button>
+            </div>
+            <div id="mto-variant-list" class="mto-variant-list"></div>
+            <div id="mto-variants-error" class="field-error" role="alert"></div>
+          </section>
+
+          <section id="mto-created-results" class="mto-created-results" aria-live="polite" hidden></section>
+
+          <div class="mto-create-footer">
+            <div id="mto-create-status" class="mto-create-status" role="status" aria-live="polite">
+              Required fields are marked with an asterisk.
+            </div>
+            <div class="mto-creator-actions">
+              <button id="mto-create-reset-button" type="button">Clear</button>
+              <button id="mto-create-submit-button" class="primary" type="submit">Create item(s)</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <nav class="mobile-action-bar" aria-label="Checkout actions">
+    <div class="mobile-add-actions">
+      <button id="mobile-create-mto-button" type="button" hidden>New MTO product</button>
+      <button id="mobile-add-product-button" type="button">Add product</button>
+    </div>
+    <button id="mobile-cancel-order-button" class="danger" type="button" hidden>Cancel order</button>
+    <button id="mobile-save-order-button" class="primary" type="button">Save receipt</button>
+  </nav>
 
   <div class="busy-overlay" aria-hidden="true">
     <div class="busy-card">
@@ -1121,6 +1832,9 @@
     let validationErrors = {};
     let currentSearchResults = [];
     let catalogVariants = [];
+    let mtoVariantDrafts = [];
+    let mtoVariantSequence = 0;
+    let createdMtoVariants = [];
     let busyDepth = 0;
     let cleanOrderFingerprint = '';
     const OTHER_CASHIER_VALUE = '__OTHER__';
@@ -1670,7 +2384,7 @@
           ? 'Changes update this receipt and MTO Item Left / Sold.'
           : 'Changes update the existing receipt, source inventory, and 訂單紀錄 rows.')
         : (mtoMode
-          ? 'Items come only from MTO 32 Summary. Shopify inventory is not changed.'
+          ? 'Use MTO 32 Summary items or create new market items here. Shopify inventory is not changed.'
           : 'The order will be recorded in 訂單紀錄.');
       elements.orderStatusBadge.textContent = order.status || 'ACTIVE';
       elements.orderStatusBadge.classList.toggle('cancelled', isCancelled(order.status));
@@ -1679,13 +2393,25 @@
         ? 'MTO32 market items'
         : 'Products and variants';
       elements.cartPanelHelp.textContent = mtoMode
-        ? 'Add items from MTO 32 Summary. Left and Sold update when the receipt is saved.'
+        ? 'Search MTO 32 Summary or create a new product. Left and Sold update when the receipt is saved.'
         : 'Add exact Shopify variants. Adding the same variant again increases its quantity.';
       elements.addProductButton.textContent = mtoMode
         ? 'Add MTO item'
         : 'Add product';
+      elements.createMtoProductButton.hidden = !mtoMode;
+      elements.mobileCreateMtoButton.hidden = !mtoMode;
+      elements.mobileAddProductButton.textContent = mtoMode
+        ? 'Add MTO item'
+        : 'Add product';
+      elements.mobileAddActions.classList.toggle('mto-mode', mtoMode);
       const cancelled = isCancelled(order.status);
       elements.cancelOrderButton.disabled = !editMode || cancelled;
+      elements.mobileCancelOrderButton.hidden = !editMode;
+      elements.mobileCancelOrderButton.disabled = !editMode || cancelled;
+      elements.mobileSaveOrderButton.disabled = cancelled;
+      elements.mobileAddProductButton.disabled = cancelled;
+      elements.mobileCreateMtoButton.disabled = cancelled;
+      elements.mobileActionBar.classList.toggle('has-cancel', editMode);
       elements.createdAt.textContent = displayDate(order.createdAt);
       elements.updatedAt.textContent = displayDate(order.updatedAt);
       elements.orderVersion.textContent = String(integerOr(order.version, 0));
@@ -1706,6 +2432,9 @@
         elements.paymentMethod,
         elements.orderNotes,
         elements.addProductButton,
+        elements.createMtoProductButton,
+        elements.mobileAddProductButton,
+        elements.mobileCreateMtoButton,
         elements.receiptFiles,
       ];
 
@@ -1714,6 +2443,8 @@
       });
 
       elements.saveOrderButton.disabled = cancelled;
+      elements.mobileSaveOrderButton.disabled = cancelled;
+      elements.mobileCancelOrderButton.disabled = cancelled || !order.orderId;
       elements.dropZone.setAttribute('aria-disabled', String(cancelled));
       elements.dropZone.tabIndex = cancelled ? -1 : 0;
 
@@ -1825,6 +2556,7 @@
       row.dataset.index = String(index);
 
       const productCell = document.createElement('td');
+      productCell.dataset.label = 'Product / variant';
       const productTitle = document.createElement('span');
       productTitle.className = 'product-title';
       productTitle.textContent = item.productTitle || item.title || 'Unnamed product';
@@ -1854,9 +2586,11 @@
       productCell.append(productTitle, variantTitle, availability);
 
       const skuCell = document.createElement('td');
+      skuCell.dataset.label = isMtoMode(order.checkoutMode) ? 'MTO Item ID' : 'SKU';
       skuCell.textContent = item.sku || '—';
 
       const quantityCell = document.createElement('td');
+      quantityCell.dataset.label = 'Quantity';
       const quantityInput = numericInput(item.quantity, '1', '1');
       quantityInput.setAttribute('aria-label', `Quantity for ${item.productTitle}`);
       quantityInput.addEventListener('input', () => {
@@ -1867,6 +2601,7 @@
       quantityCell.appendChild(quantityInput);
 
       const priceCell = document.createElement('td');
+      priceCell.dataset.label = 'Unit price';
       const priceInput = numericInput(item.unitPrice, '0.01', '0');
       priceInput.setAttribute('aria-label', `Unit price for ${item.productTitle}`);
       priceInput.addEventListener('input', () => {
@@ -1877,6 +2612,7 @@
       priceCell.appendChild(priceInput);
 
       const discountTypeCell = document.createElement('td');
+      discountTypeCell.dataset.label = 'Discount';
       const discountType = document.createElement('select');
       discountType.setAttribute('aria-label', `Discount type for ${item.productTitle}`);
       [
@@ -1901,6 +2637,7 @@
       discountTypeCell.appendChild(discountType);
 
       const discountValueCell = document.createElement('td');
+      discountValueCell.dataset.label = 'Discount value';
       const discountValue = numericInput(item.discountValue, '0.01', '0');
       discountValue.disabled = discountType.value === 'NONE';
       discountValue.setAttribute('aria-label', `Discount value for ${item.productTitle}`);
@@ -1912,10 +2649,12 @@
       discountValueCell.appendChild(discountValue);
 
       const totalCell = document.createElement('td');
+      totalCell.dataset.label = 'Line total';
       totalCell.className = 'money-cell line-total';
       totalCell.textContent = formatMoney(calculateItem(item).total);
 
       const removeCell = document.createElement('td');
+      removeCell.dataset.label = 'Remove';
       const removeButton = document.createElement('button');
       removeButton.type = 'button';
       removeButton.className = 'icon-button';
@@ -2248,6 +2987,660 @@
       return `${base}.jpg`;
     }
 
+    function mtoCreationConfiguration() {
+      const source = bootstrap && bootstrap.mtoCatalogCreation || {};
+      return {
+        sheetName: clean(source.sheetName) || 'MTO 32 Summary',
+        locationSuggestions: uniqueStrings([
+          ...(Array.isArray(source.locationSuggestions)
+            ? source.locationSuggestions
+            : []),
+          '大篋',
+          '細篋',
+        ]),
+        maxImages: Math.max(1, integerOr(source.maxImages, 10)),
+      };
+    }
+
+    function newMtoVariantDraft() {
+      mtoVariantSequence += 1;
+      return {
+        key: `mto-variant-${mtoVariantSequence}`,
+        itemId: '',
+        option: '',
+        price: '',
+        location: '',
+        stock: '0',
+      };
+    }
+
+    function resetMtoCreator(confirmReset) {
+      const hasContent = clean(elements.mtoEnglishName.value) ||
+        clean(elements.mtoChineseName.value) ||
+        clean(elements.mtoImageUrls.value) ||
+        mtoVariantDrafts.some((variant) => {
+          return clean(variant.itemId) || clean(variant.option) ||
+            clean(variant.price) || clean(variant.location) ||
+            clean(variant.stock) !== '0';
+        });
+
+      if (
+        confirmReset &&
+        hasContent &&
+        !window.confirm('Clear the new MTO product form?')
+      ) {
+        return;
+      }
+
+      elements.mtoCreateForm.reset();
+      elements.mtoImageUrls.value = '';
+      mtoVariantDrafts = [newMtoVariantDraft()];
+      createdMtoVariants = [];
+      clearMtoCreatorValidation();
+      elements.mtoCreatedResults.hidden = true;
+      elements.mtoCreatedResults.replaceChildren();
+      renderMtoVariantDrafts();
+      setMtoCreatorStatus('Required fields are marked with an asterisk.');
+    }
+
+    function openMtoCreator() {
+      if (!isMtoMode(order && order.checkoutMode)) {
+        setStatus('Switch to MTO32 Market mode before creating an MTO product.', 'error');
+        return;
+      }
+
+      if (isCancelled(order.status)) {
+        setStatus('A cancelled order is read-only.', 'error');
+        return;
+      }
+
+      if (elements.catalogBackdrop.classList.contains('open')) {
+        elements.catalogBackdrop.classList.remove('open');
+        elements.catalogBackdrop.setAttribute('aria-hidden', 'true');
+      }
+
+      if (!mtoVariantDrafts.length) {
+        resetMtoCreator(false);
+      }
+
+      const configuration = mtoCreationConfiguration();
+      elements.mtoCreateTitle.textContent = `Create product in ${configuration.sheetName}`;
+      elements.mtoCreateBackdrop.classList.add('open');
+      elements.mtoCreateBackdrop.setAttribute('aria-hidden', 'false');
+      syncModalOpenState();
+      window.setTimeout(() => elements.mtoEnglishName.focus(), 0);
+    }
+
+    function closeMtoCreator() {
+      elements.mtoCreateBackdrop.classList.remove('open');
+      elements.mtoCreateBackdrop.setAttribute('aria-hidden', 'true');
+      syncModalOpenState();
+      const focusTarget = window.matchMedia('(max-width: 700px)').matches
+        ? elements.mobileCreateMtoButton
+        : elements.createMtoProductButton;
+      focusTarget.focus();
+    }
+
+    function syncModalOpenState() {
+      const catalogOpen = elements.catalogBackdrop.classList.contains('open');
+      const creatorOpen = elements.mtoCreateBackdrop.classList.contains('open');
+      const modalOpen = catalogOpen || creatorOpen;
+      document.body.classList.toggle('modal-open', modalOpen);
+
+      [
+        document.querySelector('.toolbar'),
+        document.querySelector('.app-layout'),
+        elements.mobileActionBar,
+      ].filter(Boolean).forEach((background) => {
+        background.inert = modalOpen;
+      });
+
+      elements.catalogBackdrop.inert = creatorOpen;
+      elements.mtoCreateBackdrop.inert = catalogOpen;
+    }
+
+    function activeModalElement() {
+      if (elements.mtoCreateBackdrop.classList.contains('open')) {
+        return elements.mtoCreateBackdrop.querySelector('[role="dialog"]');
+      }
+
+      if (elements.catalogBackdrop.classList.contains('open')) {
+        return elements.catalogBackdrop.querySelector('[role="dialog"]');
+      }
+
+      return null;
+    }
+
+    function trapModalFocus(event) {
+      const modal = activeModalElement();
+
+      if (!modal || event.key !== 'Tab') {
+        return false;
+      }
+
+      const focusable = Array.from(modal.querySelectorAll([
+        'a[href]',
+        'button:not([disabled])',
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(','))).filter((control) => {
+        return !control.hidden &&
+          !control.closest('[hidden]') &&
+          control.getClientRects().length > 0;
+      });
+
+      if (!focusable.length) {
+        event.preventDefault();
+        modal.focus();
+        return true;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (!modal.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+
+      return true;
+    }
+
+    function setMtoCreatorStatus(message, type) {
+      elements.mtoCreateStatus.textContent = message || '';
+      elements.mtoCreateStatus.classList.toggle('error-text', type === 'error');
+      elements.mtoCreateStatus.classList.toggle('success-text', type === 'success');
+    }
+
+    function clearMtoCreatorValidation() {
+      elements.mtoCreateForm
+        .querySelectorAll('.field.invalid')
+        .forEach((field) => field.classList.remove('invalid'));
+      elements.mtoCreateForm
+        .querySelectorAll('[aria-invalid="true"]')
+        .forEach((control) => control.removeAttribute('aria-invalid'));
+      elements.mtoCreateForm
+        .querySelectorAll('.field-error')
+        .forEach((error) => {
+          error.textContent = '';
+        });
+      elements.mtoVariantsError.style.display = '';
+    }
+
+    function clearMtoFieldValidation(field) {
+      if (!field) {
+        return;
+      }
+
+      field.classList.remove('invalid');
+      const control = field.querySelector('input, textarea, select');
+      const error = field.querySelector('.field-error');
+
+      if (control) {
+        control.removeAttribute('aria-invalid');
+      }
+
+      if (error) {
+        error.textContent = '';
+      }
+    }
+
+    function markMtoFieldInvalid(field, message) {
+      if (!field) {
+        return;
+      }
+
+      field.classList.add('invalid');
+      const control = field.querySelector('input, textarea, select');
+      const error = field.querySelector('.field-error');
+
+      if (control) {
+        control.setAttribute('aria-invalid', 'true');
+      }
+
+      if (error) {
+        error.textContent = message;
+      }
+    }
+
+    function addMtoVariantDraft() {
+      mtoVariantDrafts.push(newMtoVariantDraft());
+      renderMtoVariantDrafts();
+      const lastCard = elements.mtoVariantList.lastElementChild;
+
+      if (lastCard) {
+        lastCard.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        const firstInput = lastCard.querySelector('input');
+
+        if (firstInput) {
+          firstInput.focus({preventScroll: true});
+        }
+      }
+    }
+
+    function removeMtoVariantDraft(key) {
+      if (mtoVariantDrafts.length <= 1) {
+        setMtoCreatorStatus('A product must have at least one variant.', 'error');
+        return;
+      }
+
+      mtoVariantDrafts = mtoVariantDrafts.filter((variant) => variant.key !== key);
+      renderMtoVariantDrafts();
+      setMtoCreatorStatus(`${mtoVariantDrafts.length} variant(s) in this product.`);
+    }
+
+    function buildMtoVariantField(options) {
+      const settings = options || {};
+      const field = document.createElement('div');
+      field.className = `field ${settings.className || ''}`.trim();
+      field.dataset.variantKey = settings.variant.key;
+      field.dataset.fieldName = settings.name;
+
+      const label = document.createElement('label');
+      const inputId = `${settings.variant.key}-${settings.name}`;
+      label.htmlFor = inputId;
+      label.appendChild(document.createTextNode(settings.label));
+
+      if (settings.required !== false) {
+        const marker = document.createElement('span');
+        marker.className = 'required-marker';
+        marker.textContent = '*';
+        label.append(document.createTextNode(' '), marker);
+      }
+
+      const input = document.createElement('input');
+      input.id = inputId;
+      input.value = settings.variant[settings.name];
+      input.required = settings.required !== false;
+      input.autocomplete = 'off';
+
+      if (settings.type) {
+        input.type = settings.type;
+      }
+
+      if (settings.inputMode) {
+        input.inputMode = settings.inputMode;
+      }
+
+      if (settings.step != null) {
+        input.step = settings.step;
+      }
+
+      if (settings.min != null) {
+        input.min = settings.min;
+      }
+
+      if (settings.placeholder) {
+        input.placeholder = settings.placeholder;
+      }
+
+      if (settings.listId) {
+        input.setAttribute('list', settings.listId);
+      }
+
+      input.addEventListener('input', () => {
+        settings.variant[settings.name] = input.value;
+        clearMtoFieldValidation(field);
+        setMtoCreatorStatus('Unsaved MTO product changes.');
+      });
+
+      const error = document.createElement('div');
+      error.className = 'field-error';
+      field.append(label, input, error);
+      return field;
+    }
+
+    function renderMtoVariantDrafts() {
+      elements.mtoVariantList.replaceChildren();
+      const locations = mtoCreationConfiguration().locationSuggestions;
+
+      mtoVariantDrafts.forEach((variant, index) => {
+        const card = document.createElement('article');
+        card.className = 'mto-variant-card';
+        card.dataset.variantKey = variant.key;
+
+        const number = document.createElement('div');
+        number.className = 'mto-variant-number';
+        number.textContent = `Variant ${index + 1}`;
+
+        const itemId = buildMtoVariantField({
+          variant,
+          name: 'itemId',
+          label: 'MTO Item ID',
+          placeholder: 'e.g. MTO32-INK-01',
+          className: 'mto-id-field',
+        });
+        const option = buildMtoVariantField({
+          variant,
+          name: 'option',
+          label: 'Option',
+          placeholder: mtoVariantDrafts.length > 1
+            ? 'Required, e.g. Blue / 30 ml'
+            : 'Optional for a single item',
+          className: 'mto-option-field',
+          required: mtoVariantDrafts.length > 1,
+        });
+        const price = buildMtoVariantField({
+          variant,
+          name: 'price',
+          label: 'Price',
+          type: 'number',
+          inputMode: 'decimal',
+          step: '0.01',
+          min: '0',
+        });
+
+        const locationListId = `${variant.key}-location-options`;
+        const location = buildMtoVariantField({
+          variant,
+          name: 'location',
+          label: 'Location',
+          placeholder: 'Choose or enter another',
+          listId: locationListId,
+        });
+        const datalist = document.createElement('datalist');
+        datalist.id = locationListId;
+        locations.forEach((value) => {
+          const choice = document.createElement('option');
+          choice.value = value;
+          datalist.appendChild(choice);
+        });
+        location.appendChild(datalist);
+
+        const stock = buildMtoVariantField({
+          variant,
+          name: 'stock',
+          label: 'Initial stock',
+          type: 'number',
+          inputMode: 'numeric',
+          step: '1',
+          min: '0',
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'mto-variant-actions';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'icon-button';
+        remove.textContent = 'Remove';
+        remove.disabled = mtoVariantDrafts.length <= 1;
+        remove.setAttribute('aria-label', `Remove variant ${index + 1}`);
+        remove.addEventListener('click', () => removeMtoVariantDraft(variant.key));
+        actions.appendChild(remove);
+
+        card.append(number, itemId, option, price, location, stock, actions);
+        elements.mtoVariantList.appendChild(card);
+      });
+    }
+
+    function parseMtoImageUrls() {
+      return uniqueStrings(
+        clean(elements.mtoImageUrls.value)
+          .split(/\r?\n/)
+          .map(clean)
+      );
+    }
+
+    function validateMtoCreator() {
+      clearMtoCreatorValidation();
+      let firstInvalid = null;
+      const mark = (field, message) => {
+        markMtoFieldInvalid(field, message);
+
+        if (!firstInvalid) {
+          firstInvalid = field;
+        }
+      };
+
+      const englishName = clean(elements.mtoEnglishName.value);
+      const chineseName = clean(elements.mtoChineseName.value);
+      const imageUrls = parseMtoImageUrls();
+      const configuration = mtoCreationConfiguration();
+
+      if (!englishName) {
+        mark(elements.mtoEnglishName.closest('.field'), 'English name is required.');
+      }
+
+      if (!chineseName) {
+        mark(elements.mtoChineseName.closest('.field'), 'Chinese name is required.');
+      }
+
+      if (imageUrls.length > configuration.maxImages) {
+        mark(
+          elements.mtoImageUrls.closest('.field'),
+          `Use no more than ${configuration.maxImages} image URL(s).`
+        );
+      } else {
+        const invalidImageUrl = imageUrls.find((url) => !safeExternalUrl(url));
+
+        if (invalidImageUrl) {
+          mark(
+            elements.mtoImageUrls.closest('.field'),
+            `Invalid image URL: ${invalidImageUrl}`
+          );
+        }
+      }
+
+      if (!mtoVariantDrafts.length) {
+        elements.mtoVariantsError.textContent = 'Add at least one variant.';
+        elements.mtoVariantsError.style.display = 'block';
+        firstInvalid = firstInvalid || elements.mtoVariantList;
+      }
+
+      const seenIds = new Map();
+      const seenOptions = new Map();
+      const requireVariantOptions = mtoVariantDrafts.length > 1;
+      mtoVariantDrafts.forEach((variant, index) => {
+        const fields = {};
+        elements.mtoVariantList
+          .querySelectorAll(`[data-variant-key="${variant.key}"][data-field-name]`)
+          .forEach((field) => {
+            fields[field.dataset.fieldName] = field;
+          });
+        const itemId = clean(variant.itemId);
+        const option = clean(variant.option);
+        const price = Number(variant.price);
+        const location = clean(variant.location);
+        const stock = Number(variant.stock);
+
+        if (!itemId) {
+          mark(fields.itemId, 'MTO Item ID is required.');
+        } else {
+          const key = itemId.toUpperCase();
+
+          if (seenIds.has(key)) {
+            mark(fields.itemId, `Duplicate of variant ${seenIds.get(key) + 1}.`);
+          } else {
+            seenIds.set(key, index);
+          }
+        }
+
+        if (requireVariantOptions && !option) {
+          mark(fields.option, 'Option is required when a product has multiple variants.');
+        } else if (requireVariantOptions) {
+          const optionKey = option.toUpperCase();
+
+          if (seenOptions.has(optionKey)) {
+            mark(fields.option, `Duplicate of variant ${seenOptions.get(optionKey) + 1}.`);
+          } else {
+            seenOptions.set(optionKey, index);
+          }
+        }
+
+        if (clean(variant.price) === '' || !Number.isFinite(price) || price < 0) {
+          mark(fields.price, 'Price must be zero or more.');
+        }
+
+        if (!location) {
+          mark(fields.location, 'Choose or enter a location.');
+        }
+
+        if (
+          clean(variant.stock) === '' ||
+          !Number.isInteger(stock) ||
+          stock < 0
+        ) {
+          mark(fields.stock, 'Stock must be a whole number of zero or more.');
+        }
+      });
+
+      if (firstInvalid) {
+        firstInvalid.scrollIntoView({behavior: 'smooth', block: 'center'});
+        const control = firstInvalid.querySelector &&
+          firstInvalid.querySelector('input, textarea, select, button');
+
+        if (control) {
+          control.focus({preventScroll: true});
+        }
+
+        setMtoCreatorStatus('Complete the highlighted fields.', 'error');
+        return null;
+      }
+
+      return {
+        mode: CHECKOUT_MODES.mto,
+        checkoutMode: CHECKOUT_MODES.mto,
+        catalogMode: CHECKOUT_MODES.mto,
+        englishName,
+        chineseName,
+        imageUrl: imageUrls[0] || '',
+        imageUrls,
+        variants: mtoVariantDrafts.map((variant) => ({
+          itemId: clean(variant.itemId),
+          option: clean(variant.option),
+          price: roundMoney(variant.price),
+          location: clean(variant.location),
+          stock: Number(variant.stock),
+        })),
+      };
+    }
+
+    function normalizeCreatedMtoVariants(result) {
+      const source = Array.isArray(result && result.items)
+        ? result.items
+        : (Array.isArray(result && result.catalogItems)
+          ? result.catalogItems
+          : []);
+
+      return source.map((item) => {
+        const prepared = Object.assign({}, item || {}, {
+          catalogMode: CHECKOUT_MODES.mto,
+          checkoutMode: CHECKOUT_MODES.mto,
+          mode: CHECKOUT_MODES.mto,
+        });
+        const normalized = normalizeCatalogVariant(prepared, prepared);
+        normalized.catalogMode = CHECKOUT_MODES.mto;
+        normalized.marketItemId = clean(
+          normalized.marketItemId || prepared.itemId || prepared.sku
+        );
+        normalized.sku = clean(normalized.sku || normalized.marketItemId);
+        return normalized;
+      }).filter((item) => item.marketItemId);
+    }
+
+    function renderCreatedMtoVariants(message) {
+      elements.mtoCreatedResults.replaceChildren();
+      elements.mtoCreatedResults.hidden = false;
+
+      const heading = document.createElement('h3');
+      heading.className = 'mto-created-heading';
+      heading.textContent = message || `${createdMtoVariants.length} MTO item(s) created.`;
+      elements.mtoCreatedResults.appendChild(heading);
+
+      createdMtoVariants.forEach((variant) => {
+        const card = document.createElement('article');
+        card.className = 'mto-created-item';
+        const copy = document.createElement('div');
+        const title = document.createElement('div');
+        title.className = 'mto-created-title';
+        title.textContent = [variant.productTitle, variant.variantTitle]
+          .filter(Boolean)
+          .join(' — ') || variant.marketItemId;
+        const meta = document.createElement('div');
+        meta.className = 'mto-created-meta';
+        meta.textContent = [
+          variant.marketItemId,
+          `Price ${formatMoney(variant.price)}`,
+          clean(variant.available) === '' ? '' : `Stock ${variant.available}`,
+          variant.sourceLocation,
+        ].filter(Boolean).join(' · ');
+        copy.append(title, meta);
+
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'primary';
+        add.textContent = 'Add to cart';
+        add.addEventListener('click', () => {
+          if (addVariantToCart(variant)) {
+            add.disabled = true;
+            add.textContent = 'Added';
+          }
+        });
+        card.append(copy, add);
+        elements.mtoCreatedResults.appendChild(card);
+      });
+
+      elements.mtoCreatedResults.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    }
+
+    async function submitMtoCreator(event) {
+      event.preventDefault();
+
+      if (!isMtoMode(order && order.checkoutMode)) {
+        setMtoCreatorStatus('This form is available only in MTO32 Market mode.', 'error');
+        return;
+      }
+
+      const payload = validateMtoCreator();
+
+      if (!payload) {
+        return;
+      }
+
+      setBusy(true, `Creating ${payload.variants.length} MTO item(s)…`);
+      elements.mtoCreateSubmitButton.disabled = true;
+      setMtoCreatorStatus('Saving new rows to MTO 32 Summary…');
+
+      try {
+        const result = await serverCall('createCheckoutMtoCatalogProduct', payload);
+
+        if (!result || result.ok === false) {
+          throw new Error((result && result.message) || 'The MTO product could not be created.');
+        }
+
+        createdMtoVariants = normalizeCreatedMtoVariants(result);
+
+        if (!createdMtoVariants.length) {
+          throw new Error(
+            'The rows were created, but the server returned no catalog items. Search for the new MTO Item ID before adding it.'
+          );
+        }
+
+        catalogVariants = createdMtoVariants.slice();
+        const message = clean(result.message) ||
+          `${createdMtoVariants.length} MTO item(s) created successfully.`;
+        renderCreatedMtoVariants(message);
+        setMtoCreatorStatus('Created. Choose the variant(s) to add to this cart.', 'success');
+        setStatus(message, 'success');
+      } catch (error) {
+        const message = errorMessage(error);
+        setMtoCreatorStatus(message, 'error');
+        setStatus(message, 'error');
+      } finally {
+        elements.mtoCreateSubmitButton.disabled = false;
+        setBusy(false);
+      }
+    }
+
     function openCatalog() {
       const mtoMode = isMtoMode(order.checkoutMode);
       catalogVariants = [];
@@ -2264,6 +3657,7 @@
       elements.catalogStockHeading.textContent = mtoMode
         ? 'MTO Item Left'
         : 'Available';
+      elements.catalogCreateMtoButton.hidden = !mtoMode;
       elements.catalogSearch.placeholder = mtoMode
         ? 'Search MTO ID, English/Chinese name, option, or location'
         : 'Search English/Chinese name, brand, handle, or SKU';
@@ -2277,13 +3671,18 @@
         : 'Search by English/Chinese name, brand, handle, or SKU.';
       elements.catalogBackdrop.classList.add('open');
       elements.catalogBackdrop.setAttribute('aria-hidden', 'false');
+      syncModalOpenState();
       elements.catalogSearch.focus();
     }
 
     function closeCatalog() {
       elements.catalogBackdrop.classList.remove('open');
       elements.catalogBackdrop.setAttribute('aria-hidden', 'true');
-      elements.addProductButton.focus();
+      syncModalOpenState();
+      const focusTarget = window.matchMedia('(max-width: 700px)').matches
+        ? elements.mobileAddProductButton
+        : elements.addProductButton;
+      focusTarget.focus();
     }
 
     async function searchCatalog() {
@@ -2388,6 +3787,7 @@
       catalogVariants.forEach((variant, index) => {
         const row = document.createElement('tr');
         const product = document.createElement('td');
+        product.dataset.label = 'Product';
 
         const summary = document.createElement('div');
         summary.className = 'catalog-product-summary';
@@ -2450,16 +3850,21 @@
         summary.append(thumbnail, copy);
         product.appendChild(summary);
         const variantCell = document.createElement('td');
+        variantCell.dataset.label = isMtoMode(order.checkoutMode) ? 'Option' : 'Variant';
         variantCell.textContent = variant.variantTitle || 'Default Title';
         const sku = document.createElement('td');
+        sku.dataset.label = isMtoMode(order.checkoutMode) ? 'MTO Item ID' : 'SKU';
         sku.textContent = variant.sku || '—';
         const price = document.createElement('td');
+        price.dataset.label = 'Price';
         price.className = 'money-cell';
         price.textContent = formatMoney(variant.price);
         const stock = document.createElement('td');
+        stock.dataset.label = isMtoMode(order.checkoutMode) ? 'MTO Item Left' : 'Available';
         stock.className = 'money-cell';
         stock.textContent = clean(variant.available) === '' ? '—' : String(variant.available);
         const action = document.createElement('td');
+        action.dataset.label = 'Add';
         const add = document.createElement('button');
         add.type = 'button';
         add.textContent = 'Add';
@@ -2491,6 +3896,16 @@
         return;
       }
 
+      if (addVariantToCart(variant)) {
+        closeCatalog();
+      }
+    }
+
+    function addVariantToCart(variant) {
+      if (!variant) {
+        return false;
+      }
+
       const orderMode = normalizeCheckoutMode(order.checkoutMode);
       const resultMode = normalizeCheckoutMode(variant.catalogMode);
 
@@ -2499,7 +3914,7 @@
           'The checkout mode changed after this search. Search again before adding the item.',
           'error'
         );
-        return;
+        return false;
       }
 
       const variantKey = catalogItemKey(variant);
@@ -2521,7 +3936,7 @@
           `Only ${available} available for ${variant.productTitle}.`,
           'error'
         );
-        return;
+        return false;
       }
 
       if (existing) {
@@ -2552,7 +3967,7 @@
 
       clearFieldError('items');
       renderCart();
-      closeCatalog();
+      return true;
     }
 
     function normalizeOrderSummaries(result) {
@@ -3225,6 +4640,7 @@
       elements.paymentMethod = $('payment-method');
       elements.orderNotes = $('order-notes');
       elements.addProductButton = $('add-product-button');
+      elements.createMtoProductButton = $('create-mto-product-button');
       elements.cartPanelTitle = $('cart-panel-title');
       elements.cartPanelHelp = $('cart-panel-help');
       elements.cartPanel = $('cart-panel');
@@ -3248,11 +4664,32 @@
       elements.catalogSearch = $('catalog-search');
       elements.catalogSearchButton = $('catalog-search-button');
       elements.catalogCloseButton = $('catalog-close-button');
+      elements.catalogCreateMtoButton = $('catalog-create-mto-button');
       elements.catalogResults = $('catalog-results');
       elements.catalogMessage = $('catalog-message');
       elements.catalogVariantHeading = $('catalog-variant-heading');
       elements.catalogSkuHeading = $('catalog-sku-heading');
       elements.catalogStockHeading = $('catalog-stock-heading');
+      elements.mtoCreateBackdrop = $('mto-create-backdrop');
+      elements.mtoCreateTitle = $('mto-create-title');
+      elements.mtoCreateCloseButton = $('mto-create-close-button');
+      elements.mtoCreateForm = $('mto-create-form');
+      elements.mtoEnglishName = $('mto-english-name');
+      elements.mtoChineseName = $('mto-chinese-name');
+      elements.mtoImageUrls = $('mto-image-urls');
+      elements.mtoAddVariantButton = $('mto-add-variant-button');
+      elements.mtoVariantList = $('mto-variant-list');
+      elements.mtoVariantsError = $('mto-variants-error');
+      elements.mtoCreatedResults = $('mto-created-results');
+      elements.mtoCreateStatus = $('mto-create-status');
+      elements.mtoCreateResetButton = $('mto-create-reset-button');
+      elements.mtoCreateSubmitButton = $('mto-create-submit-button');
+      elements.mobileActionBar = document.querySelector('.mobile-action-bar');
+      elements.mobileAddActions = document.querySelector('.mobile-add-actions');
+      elements.mobileCreateMtoButton = $('mobile-create-mto-button');
+      elements.mobileAddProductButton = $('mobile-add-product-button');
+      elements.mobileCancelOrderButton = $('mobile-cancel-order-button');
+      elements.mobileSaveOrderButton = $('mobile-save-order-button');
       elements.busyText = $('busy-text');
     }
 
@@ -3264,8 +4701,18 @@
       elements.cancelOrderButton.addEventListener('click', cancelOrder);
       elements.closeButton.addEventListener('click', closeCheckout);
       elements.addProductButton.addEventListener('click', openCatalog);
+      elements.createMtoProductButton.addEventListener('click', openMtoCreator);
       elements.catalogSearchButton.addEventListener('click', searchCatalog);
       elements.catalogCloseButton.addEventListener('click', closeCatalog);
+      elements.catalogCreateMtoButton.addEventListener('click', openMtoCreator);
+      elements.mtoCreateCloseButton.addEventListener('click', closeMtoCreator);
+      elements.mtoAddVariantButton.addEventListener('click', addMtoVariantDraft);
+      elements.mtoCreateResetButton.addEventListener('click', () => resetMtoCreator(true));
+      elements.mtoCreateForm.addEventListener('submit', submitMtoCreator);
+      elements.mobileCreateMtoButton.addEventListener('click', openMtoCreator);
+      elements.mobileAddProductButton.addEventListener('click', openCatalog);
+      elements.mobileCancelOrderButton.addEventListener('click', cancelOrder);
+      elements.mobileSaveOrderButton.addEventListener('click', saveOrder);
       elements.checkoutMode.addEventListener('change', changeCheckoutMode);
 
       elements.orderSearch.addEventListener('keydown', (event) => {
@@ -3288,8 +4735,35 @@
         }
       });
 
+      elements.mtoCreateBackdrop.addEventListener('click', (event) => {
+        if (event.target === elements.mtoCreateBackdrop) {
+          closeMtoCreator();
+        }
+      });
+
+      [
+        elements.mtoEnglishName,
+        elements.mtoChineseName,
+        elements.mtoImageUrls,
+      ].forEach((input) => {
+        input.addEventListener('input', () => {
+          clearMtoFieldValidation(input.closest('.field'));
+          setMtoCreatorStatus('Unsaved MTO product changes.');
+        });
+      });
+
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && elements.catalogBackdrop.classList.contains('open')) {
+        if (trapModalFocus(event)) {
+          return;
+        }
+
+        if (event.key !== 'Escape') {
+          return;
+        }
+
+        if (elements.mtoCreateBackdrop.classList.contains('open')) {
+          closeMtoCreator();
+        } else if (elements.catalogBackdrop.classList.contains('open')) {
           closeCatalog();
         }
       });

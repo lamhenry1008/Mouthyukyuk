@@ -16,6 +16,10 @@ const CHECKOUT_CONFIG = Object.freeze({
     sheetName: 'MTO 32 Summary',
     orderPrefix: 'MTO32',
     sequenceProperty: 'CHECKOUT_MTO32_LAST_SEQUENCE',
+    locationSuggestions: Object.freeze([
+      '大篋',
+      '細篋',
+    ]),
     headers: Object.freeze({
       itemId: Object.freeze(['MTO Item ID']),
       englishName: Object.freeze(['MTO English Name', 'English Name']),
@@ -219,7 +223,23 @@ function getCheckoutBootstrap() {
       CHECKOUT_CONFIG.paymentMethods.slice(),
     cashiers: checkoutGetCashierOptions_(),
     customers: checkoutGetCustomerOptions_(),
+    mtoCatalogCreation:
+      getCheckoutMtoCatalogCreationBootstrap(),
     recentOrders: findCheckoutOrders(''),
+  };
+}
+
+/**
+ * Static configuration for the MTO product form. Locations are suggestions,
+ * not an allow-list: market staff may enter a new storage location.
+ */
+function getCheckoutMtoCatalogCreationBootstrap() {
+  return {
+    mode: CHECKOUT_CONFIG.modes.mto32,
+    sheetName: CHECKOUT_CONFIG.mto32.sheetName,
+    locationSuggestions:
+      CHECKOUT_CONFIG.mto32.locationSuggestions.slice(),
+    maxImages: CHECKOUT_CONFIG.maxImages,
   };
 }
 
@@ -556,6 +576,442 @@ function checkoutSearchMto32Catalog_(searchText) {
       })
       .slice(0, 100)
       .map((item) => Object.assign({}, item));
+}
+
+/**
+ * Creates one new MTO product with one or more variant rows.
+ *
+ * Payload:
+ * {
+ *   englishName: String,
+ *   chineseName: String,
+ *   imageUrl: String, // optional; or imageUrls: String[]
+ *   variants: [{itemId, option, price, location, stock}]
+ * }
+ *
+ * MTO Item ID is the case-insensitive identity. The whole request is
+ * validated under one script lock and appended with one atomic Sheets API
+ * request, so no subset of the submitted variants can be created and extra
+ * helper columns remain untouched. This path never reads or writes Shopify.
+ */
+function createCheckoutMtoCatalogProduct(payload) {
+  const submitted = payload || {};
+  const submittedMode = checkoutClean_(
+      submitted.checkoutMode ||
+      submitted.catalogMode ||
+      submitted.mode);
+
+  if (
+    !submittedMode ||
+    checkoutNormalizeMode_(submittedMode) !==
+      CHECKOUT_CONFIG.modes.mto32
+  ) {
+    throw new Error(
+        'New market products can be created only in MTO32 mode.');
+  }
+
+  const product = checkoutNormalizeNewMtoCatalogProduct_(submitted);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const catalog = checkoutReadMto32Catalog_();
+
+    product.variants.forEach((variant) => {
+      if (catalog.byKey[variant.itemKey]) {
+        throw new Error(
+            `MTO Item ID already exists: ${variant.itemId}. ` +
+            'Use a different ID.');
+      }
+    });
+
+    const sheet = catalog.sheet;
+    const lastCatalogRow = catalog.items.reduce((maximum, item) => {
+      return Math.max(maximum, Number(item.sourceRow) || 1);
+    }, 1);
+    const startRow = Math.max(2, lastCatalogRow + 1);
+
+    checkoutWriteNewMtoCatalogRows_(
+        sheet.getParent(),
+        sheet,
+        startRow,
+        product,
+        catalog.columns);
+    SpreadsheetApp.flush();
+
+    const items = product.variants.map((variant, offset) => {
+      return checkoutNewMtoCatalogItem_(
+          product,
+          variant,
+          startRow + offset);
+    });
+
+    return {
+      ok: true,
+      createdCount: items.length,
+      sourceSheetName: CHECKOUT_CONFIG.mto32.sheetName,
+      product: {
+        englishName: product.englishName,
+        chineseName: product.chineseName,
+        imageUrl: product.imageUrls[0] || '',
+        imageUrls: product.imageUrls.slice(),
+      },
+      items,
+      // Alias retained for clients that describe search results as catalogItems.
+      catalogItems: items.map((item) => Object.assign({}, item)),
+      message:
+        `Created ${items.length} MTO item row(s) in ` +
+        `${CHECKOUT_CONFIG.mto32.sheetName}.`,
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function checkoutNormalizeNewMtoCatalogProduct_(payload) {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload)
+  ) {
+    throw new Error('New MTO product data is invalid.');
+  }
+
+  const englishName = checkoutMtoRequiredCatalogText_(
+      payload.englishName || payload.productTitle,
+      'MTO English Name',
+      250);
+  const chineseName = checkoutMtoRequiredCatalogText_(
+      payload.chineseName,
+      'MTO Chinese Name',
+      250);
+  const imageUrls = checkoutNormalizeNewMtoImageUrls_(
+      payload.imageUrls !== undefined
+        ? payload.imageUrls
+        : payload.images !== undefined
+          ? payload.images
+          : payload.imageUrl);
+  const submittedVariants = Array.isArray(payload.variants)
+    ? payload.variants
+    : Array.isArray(payload.items)
+      ? payload.items
+      : [];
+
+  if (submittedVariants.length === 0) {
+    throw new Error('Add at least one MTO product variant.');
+  }
+
+  if (submittedVariants.length > 200) {
+    throw new Error(
+        'A single MTO product cannot contain more than 200 variants.');
+  }
+
+  const seenIds = {};
+  const seenOptions = {};
+  const hasMultipleVariants = submittedVariants.length > 1;
+  const variants = submittedVariants.map((rawVariant, offset) => {
+    const variant = rawVariant || {};
+    const rowLabel = `Variant ${offset + 1}`;
+    const itemId = checkoutMtoRequiredCatalogText_(
+        variant.itemId ||
+        variant.sourceItemId ||
+        variant.marketItemId ||
+        variant.mtoItemId ||
+        variant.sku,
+        `${rowLabel} MTO Item ID`,
+        100);
+    const itemKey = checkoutMtoItemKey_(itemId);
+
+    if (seenIds[itemKey]) {
+      throw new Error(
+          `Duplicate MTO Item ID in this product: ${itemId}. ` +
+          'IDs are case-insensitive.');
+    }
+
+    seenIds[itemKey] = true;
+
+    const option = checkoutMtoOptionalCatalogText_(
+        variant.option || variant.variantTitle,
+        `${rowLabel} MTO Item Option`,
+        250);
+
+    if (hasMultipleVariants && !option) {
+      throw new Error(
+          `${rowLabel} MTO Item Option is required when a product has ` +
+          'multiple variants.');
+    }
+
+    if (hasMultipleVariants) {
+      const optionKey = option.toUpperCase();
+
+      if (seenOptions[optionKey]) {
+        throw new Error(
+            `Duplicate MTO Item Option in this product: ${option}. ` +
+            'Options are case-insensitive.');
+      }
+
+      seenOptions[optionKey] = true;
+    }
+    const location = checkoutMtoRequiredCatalogText_(
+        variant.location || variant.sourceLocation,
+        `${rowLabel} MTO Item Location`,
+        160);
+    const rawPrice = variant.price !== undefined
+      ? variant.price
+      : variant.unitPrice;
+    const priceText = checkoutClean_(rawPrice);
+    const price = checkoutMoney_(rawPrice);
+
+    if (
+      !priceText ||
+      !Number.isFinite(price) ||
+      price < 0
+    ) {
+      throw new Error(
+          `${rowLabel} MTO Item Price must be zero or a positive number.`);
+    }
+
+    const rawStock = variant.stock !== undefined
+      ? variant.stock
+      : variant.available;
+    const stock = checkoutMtoWholeNumber_(
+        rawStock,
+        `${rowLabel} MTO Item Stock`,
+        itemId);
+
+    return {
+      itemId,
+      itemKey,
+      option,
+      price,
+      location,
+      stock,
+    };
+  });
+
+  return {
+    englishName,
+    chineseName,
+    imageUrls,
+    variants,
+  };
+}
+
+function checkoutMtoRequiredCatalogText_(value, label, maximumLength) {
+  const text = checkoutMtoOptionalCatalogText_(
+      value,
+      label,
+      maximumLength);
+
+  if (!text) {
+    throw new Error(`${label} is required.`);
+  }
+
+  return text;
+}
+
+function checkoutMtoOptionalCatalogText_(value, label, maximumLength) {
+  if (
+    value !== null &&
+    value !== undefined &&
+    typeof value === 'object'
+  ) {
+    throw new Error(`${label} is invalid.`);
+  }
+
+  const text = String(value == null ? '' : value)
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .trim();
+
+  if (text.length > maximumLength) {
+    throw new Error(
+        `${label} cannot exceed ${maximumLength} characters.`);
+  }
+
+  return text;
+}
+
+function checkoutNormalizeNewMtoImageUrls_(submitted) {
+  const candidates = [];
+  const values = Array.isArray(submitted)
+    ? submitted
+    : [submitted];
+
+  values.forEach((rawValue) => {
+    let value = rawValue;
+
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      value = value.url || value.imageUrl || value.thumbnailUrl;
+    }
+
+    if (value === null || value === undefined) {
+      return;
+    }
+
+    if (typeof value === 'object') {
+      throw new Error('MTO Image URL is invalid.');
+    }
+
+    String(value)
+        .split(/[\r\n;|]+/)
+        .map(checkoutClean_)
+        .filter(Boolean)
+        .forEach((url) => candidates.push(url));
+  });
+
+  if (candidates.length > CHECKOUT_CONFIG.maxImages) {
+    throw new Error(
+        `A product can contain at most ${CHECKOUT_CONFIG.maxImages} ` +
+        'MTO image URLs.');
+  }
+
+  const normalized = [];
+  const seen = {};
+
+  candidates.forEach((candidate, offset) => {
+    if (
+      candidate.length > 2048 ||
+      !/^https?:\/\/[^\s]+$/i.test(candidate)
+    ) {
+      throw new Error(
+          `MTO Image URL ${offset + 1} must be a valid HTTP(S) URL.`);
+    }
+
+    const imageUrl = checkoutNormalizeCatalogImageUrl_(candidate);
+
+    if (!seen[imageUrl]) {
+      seen[imageUrl] = true;
+      normalized.push(imageUrl);
+    }
+  });
+
+  return normalized;
+}
+
+/**
+ * Writes only the ten resolved MTO columns. userEnteredValue.stringValue keeps
+ * browser text literal even when it begins with a spreadsheet formula sigil.
+ * The single spreadsheets.batchUpdate request is atomic and does not blank
+ * extra helper columns or formulas elsewhere in the target sheet.
+ */
+function checkoutWriteNewMtoCatalogRows_(
+    spreadsheet,
+    sheet,
+    startRow,
+    product,
+    columns) {
+  if (
+    typeof Sheets === 'undefined' ||
+    !Sheets.Spreadsheets ||
+    typeof Sheets.Spreadsheets.batchUpdate !== 'function'
+  ) {
+    throw new Error(
+        'The Advanced Google Sheets service is required for safe MTO ' +
+        'catalog writes. Enable Google Sheets API v4 in Apps Script ' +
+        'Services.');
+  }
+
+  const variants = product.variants || [];
+
+  if (!variants.length) {
+    return;
+  }
+
+  const requiredLastRow = startRow + variants.length - 1;
+  const storedImageUrls = product.imageUrls.join('\n');
+  const fieldValues = {
+    itemId: variants.map((variant) => variant.itemId),
+    englishName: variants.map(() => product.englishName),
+    chineseName: variants.map(() => product.chineseName),
+    option: variants.map((variant) => variant.option),
+    price: variants.map((variant) => variant.price),
+    location: variants.map((variant) => variant.location),
+    stock: variants.map((variant) => variant.stock),
+    left: variants.map((variant) => variant.stock),
+    sold: variants.map(() => 0),
+    imageUrl: variants.map(() => storedImageUrls),
+  };
+  const requests = [];
+
+  if (requiredLastRow > sheet.getMaxRows()) {
+    requests.push({
+      appendDimension: {
+        sheetId: sheet.getSheetId(),
+        dimension: 'ROWS',
+        length: requiredLastRow - sheet.getMaxRows(),
+      },
+    });
+  }
+
+  Object.keys(fieldValues).forEach((field) => {
+    const columnIndex = columns[field];
+
+    requests.push({
+      updateCells: {
+        range: {
+          sheetId: sheet.getSheetId(),
+          startRowIndex: startRow - 1,
+          endRowIndex: requiredLastRow,
+          startColumnIndex: columnIndex,
+          endColumnIndex: columnIndex + 1,
+        },
+        rows: fieldValues[field].map((value) => ({
+          values: [{
+            userEnteredValue: checkoutMtoExtendedValue_(value),
+          }],
+        })),
+        fields: 'userEnteredValue',
+      },
+    });
+  });
+
+  Sheets.Spreadsheets.batchUpdate(
+      {requests},
+      spreadsheet.getId());
+}
+
+function checkoutMtoExtendedValue_(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return {numberValue: value};
+  }
+
+  return {stringValue: String(value == null ? '' : value)};
+}
+
+function checkoutNewMtoCatalogItem_(product, variant, sourceRow) {
+  return {
+    mode: CHECKOUT_CONFIG.modes.mto32,
+    checkoutMode: CHECKOUT_CONFIG.modes.mto32,
+    catalogMode: CHECKOUT_CONFIG.modes.mto32,
+    itemKey: variant.itemKey,
+    sourceSheetName: CHECKOUT_CONFIG.mto32.sheetName,
+    sourceItemId: variant.itemId,
+    marketItemId: variant.itemId,
+    sourceRow,
+    sourceLocation: variant.location,
+    productId: '',
+    variantId: '',
+    inventoryItemId: '',
+    sku: variant.itemId,
+    productTitle: product.englishName,
+    chineseName: product.chineseName,
+    variantTitle: variant.option,
+    price: variant.price,
+    available: variant.stock,
+    tracked: false,
+    vendor: '',
+    productStatus: '',
+    imageUrl: product.imageUrls[0] || '',
+    imageUrls: product.imageUrls.slice(),
+    imageAlt: product.englishName || variant.itemId,
+    stock: variant.stock,
+    left: variant.stock,
+    sold: 0,
+  };
 }
 
 /**
